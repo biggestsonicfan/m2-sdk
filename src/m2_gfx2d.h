@@ -54,6 +54,19 @@
 #define G2D_CX 248.0f
 #define G2D_CY 192.0f
 
+/* Shared launcher->app window control (a fixed RAM cell in the 8 MB ext-RAM
+ * window). When wc[0]==MAGIC, g2d_begin() clips every frame to {wc[1..4]} =
+ * x,y,w,h, so a launcher can run an UNMODIFIED app inside a window; else
+ * fullscreen. A launcher MUST clear it (g2d_window_clear) before running a
+ * fullscreen app, since the cell is otherwise uninitialized RAM. */
+#define G2D_WINCTL       0x043FE000u
+#define G2D_WINCTL_MAGIC 0x57494E44      /* 'WIND' */
+static void g2d_window_set(int x, int y, int w, int h) {
+    volatile int *wc = (volatile int *)G2D_WINCTL;
+    wc[1] = x; wc[2] = y; wc[3] = w; wc[4] = h; wc[0] = G2D_WINCTL_MAGIC;
+}
+static void g2d_window_clear(void) { *(volatile int *)G2D_WINCTL = 0; }
+
 static u32 g2d__buf[0x3000];    /* GEO display list (fits bufferram past 0x10000) */
 static u32 g2d__n;
 static u32 g2d__slots;          /* active colorbase bitmask (slots 1..31) */
@@ -136,10 +149,39 @@ static void g2d_begin(void) {
     g2d__w(G2D_OP_FOCAL); g2d__w(g2d__f(1.0f)); g2d__w(g2d__f(1.0f));
     g2d__w(G2D_OP_LIGHT); g2d__w(g2d__f(0.706f)); g2d__w(g2d__f(-0.693f)); g2d__w(g2d__f(0.145f));
     g2d__w(G2D_OP_WINDOW);
-    g2d__w(0x0000007Fu); g2d__w(0x01F001FFu);
+    { /* honor a shared launcher->app window-control block: if armed, every frame
+       * clips to that rect (so a launcher can run ANY app windowed); else full. */
+      volatile int *wc = (volatile int *)G2D_WINCTL;
+      if (wc[0] == G2D_WINCTL_MAGIC) {
+          int x = wc[1], y = wc[2], w = wc[3], h = wc[4];
+          g2d__w(((u32)x << 16)       | (((u32)(y + 127))     & 0x1ffu));
+          g2d__w(((u32)(x + w) << 16) | (((u32)(y + h + 127)) & 0x1ffu));
+      } else {
+          g2d__w(0x0000007Fu); g2d__w(0x01F001FFu);
+      }
+    }
     g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu);
     for (cb = 1; cb < 32u; cb++) if (g2d__slots & (1u << cb)) g2d__color_header(cb);
     g2d__zc = G2D_ZBASE;
+}
+
+/* GEO WINDOW/clip command (cmd 0x303, from the firmware's set_window): hardware-
+ * clip subsequent drawing to a screen rectangle. The 4 trailing words are the
+ * per-eye-mode projection CENTRES; we keep them at the screen centre (0x00F8013F)
+ * so screen coordinates are unchanged and only the clip rect moves. Coordinate
+ * word = (x << 16) | ((y + 127) & 0x1ff)  (X high halfword; Y +127 into the 512-
+ * tall hw space — matches g2d_begin's fullscreen 0x0000007F / 0x01F001FF).
+ * Emit g2d_window(x,y,w,h) to clip to a window, g2d_window_full() to restore. */
+static void g2d_window(int x, int y, int w, int h) {
+    g2d__w(G2D_OP_WINDOW);
+    g2d__w(((u32)x << 16)       | (((u32)(y + 127))     & 0x1ffu));   /* start (TL) */
+    g2d__w(((u32)(x + w) << 16) | (((u32)(y + h + 127)) & 0x1ffu));   /* end   (BR) */
+    g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu);
+}
+static void g2d_window_full(void) {
+    g2d__w(G2D_OP_WINDOW);
+    g2d__w(0x0000007Fu); g2d__w(0x01F001FFu);
+    g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu);
 }
 
 /* arbitrary screen-space quad (corners in order), colour slot cb */

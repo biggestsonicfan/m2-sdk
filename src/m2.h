@@ -44,6 +44,13 @@ typedef unsigned int   u32;
 #define M2_IN1       (*(volatile u8  *)0x01C00004u)  /* P1 (active-low)             */
 #define M2_IN2       (*(volatile u8  *)0x01C00006u)  /* P2 (active-low)             */
 
+/* Launcher app-exit hook (a fixed cell in the 8 MB ext-RAM window): when armed,
+ * m2_vsync() returns to the handler on P1 Start, so a launcher can stop ANY app.
+ * A launcher arms it (m2_exit_arm) before running an app and disarms it for its
+ * own UI; left uninitialized it never triggers. [0]=magic, [1]=handler addr. */
+#define M2_EXIT_CTL   0x043FE020u
+#define M2_EXIT_MAGIC 0x45584954u    /* 'EXIT' */
+
 #define M2_RENDERMODE (*(volatile u16 *)0x10000000u)
 #define M2_HSYNC      (*(volatile u16 *)0x01040000u)
 #define M2_VSYNC      (*(volatile u16 *)0x01060000u)
@@ -88,6 +95,14 @@ static void m2_vsync(void) {
     M2_IRQ_ENA = M2_IRQ_VBL;
     while (!(M2_IRQ_REQ & M2_IRQ_VBL)) { }
     M2_IRQ_REQ = ~M2_IRQ_VBL;
+    /* armed by a launcher: P1 Start returns control to it (stop the app) */
+    {
+        volatile u32 *ex = (volatile u32 *)M2_EXIT_CTL;
+        if (ex[0] == M2_EXIT_MAGIC) {
+            M2_IO_BANK = 0;
+            if (!(M2_IN0 & 0x10u)) ((void (*)(void))ex[1])();   /* never returns */
+        }
+    }
 }
 
 /* ---- palette / tiles / text ----------------------------------------------- */
@@ -146,6 +161,13 @@ static u32 m2_start(void) {         /* IN0: bit4 = START1, bit5 = START2 */
     M2_IO_BANK = 0;
     return (!(M2_IN0 & 0x10) ? 1u : 0u) | (!(M2_IN0 & 0x20) ? 2u : 0u);
 }
+
+/* Launcher control of the m2_vsync P1-Start exit hook (see M2_EXIT_CTL). */
+static void m2_exit_arm(void (*handler)(void)) {
+    volatile u32 *ex = (volatile u32 *)M2_EXIT_CTL;
+    ex[1] = (u32)handler; ex[0] = M2_EXIT_MAGIC;
+}
+static void m2_exit_disarm(void) { *(volatile u32 *)M2_EXIT_CTL = 0; }
 
 /* ---- sound (sound board: i8251 USART -> SCSP MIDI) ------------------------- *
  * The i960 sends 3-byte sound commands to the sound 68000 via an i8251 USART:
