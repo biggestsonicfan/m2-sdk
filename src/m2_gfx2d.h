@@ -326,7 +326,7 @@ static void g2d_font_atlas(void) {
                  * read cleanly; value 2 alone would fill letters into blobs.
                  * Write the column mirrored (7-gx): the GEO samples a textured quad
                  * mirrored in U, so storing each glyph flipped renders it upright. */
-                g2d_texel(ax + (7 - gx), ay + gy, (u8)(ink == 1 ? 14 : 0));
+                g2d_texel(ax + (7 - gx), ay + gy, (u8)(ink == 1 ? 14 : 0x0f));
             }
     }
 }
@@ -340,7 +340,7 @@ static void g2d_ttext_scaled(float x, float y, const char *s, u32 cb, float scal
     float gw = 8.0f * scale;
     /* atlas header: 128x64 (wbits=2,hbits=1), sheet0, transparent(bit13)+textured(bit14) */
     g2d__w(G2D_OP_TEXDATA); g2d__w(G2D_TEXRAM_BIT | G2D_FONT_HDR); g2d__w(4u);
-    g2d__w(0x4000u | 2u | (1u << 3));       /* th0: textured, OPAQUE (AA edges) */
+    g2d__w(0x6000u | 2u | (1u << 3));       /* th0: textured + transparent (bg texel 0xf) */
     g2d__w(0u);                             /* th1 lumabase 0 */
     g2d__w(0u);                             /* th2 texx=0 texy=0 sheet0 */
     g2d__w((cb & 0x3ffu) << 6);             /* th3 colorbase */
