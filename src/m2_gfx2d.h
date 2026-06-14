@@ -54,19 +54,6 @@
 #define G2D_CX 248.0f
 #define G2D_CY 192.0f
 
-/* Shared launcher->app window control (a fixed RAM cell in the 8 MB ext-RAM
- * window). When wc[0]==MAGIC, g2d_begin() clips every frame to {wc[1..4]} =
- * x,y,w,h, so a launcher can run an UNMODIFIED app inside a window; else
- * fullscreen. A launcher MUST clear it (g2d_window_clear) before running a
- * fullscreen app, since the cell is otherwise uninitialized RAM. */
-#define G2D_WINCTL       0x043FE000u
-#define G2D_WINCTL_MAGIC 0x57494E44      /* 'WIND' */
-static void g2d_window_set(int x, int y, int w, int h) {
-    volatile int *wc = (volatile int *)G2D_WINCTL;
-    wc[1] = x; wc[2] = y; wc[3] = w; wc[4] = h; wc[0] = G2D_WINCTL_MAGIC;
-}
-static void g2d_window_clear(void) { *(volatile int *)G2D_WINCTL = 0; }
-
 static u32 g2d__buf[0x3000];    /* GEO display list (fits bufferram past 0x10000) */
 static u32 g2d__n;
 static u32 g2d__slots;          /* active colorbase bitmask (slots 1..31) */
@@ -146,27 +133,11 @@ static void g2d_begin(void) {
     g2d__w(G2D_OP_MODE);  g2d__w(1u);
     g2d__w(G2D_OP_TEXPARAM); g2d__w(0u); g2d__w(0x20u);
     for (cb = 0; cb < 0x20u; cb++) { g2d__w((u32)0xFFu | (0x60u << 8)); g2d__w(g2d__f(1.0f)); }
-    { /* Shared launcher->app window control: if armed, SCALE the whole app into
-       * the window -- focal = ww/496 x wh/384 shrinks the projection, and the clip
-       * confines it -- so a launcher runs ANY app windowed (not cropped). The
-       * projection centres stay at screen-centre, which maps a centred window
-       * exactly (px 0..496 -> wx..wx+ww). Unarmed -> fullscreen, focal 1. */
-      volatile int *wc = (volatile int *)G2D_WINCTL;
-      int win = (wc[0] == G2D_WINCTL_MAGIC);
-      float fx = win ? (float)wc[3] / 496.0f : 1.0f;
-      float fy = win ? (float)wc[4] / 384.0f : 1.0f;
-      g2d__w(G2D_OP_FOCAL); g2d__w(g2d__f(fx)); g2d__w(g2d__f(fy));
-      g2d__w(G2D_OP_LIGHT); g2d__w(g2d__f(0.706f)); g2d__w(g2d__f(-0.693f)); g2d__w(g2d__f(0.145f));
-      g2d__w(G2D_OP_WINDOW);
-      if (win) {
-          int x = wc[1], y = wc[2], w = wc[3], h = wc[4];
-          g2d__w(((u32)x << 16)       | (((u32)(y + 127))     & 0x1ffu));
-          g2d__w(((u32)(x + w) << 16) | (((u32)(y + h + 127)) & 0x1ffu));
-      } else {
-          g2d__w(0x0000007Fu); g2d__w(0x01F001FFu);
-      }
-      g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu);
-    }
+    g2d__w(G2D_OP_FOCAL); g2d__w(g2d__f(1.0f)); g2d__w(g2d__f(1.0f));
+    g2d__w(G2D_OP_LIGHT); g2d__w(g2d__f(0.706f)); g2d__w(g2d__f(-0.693f)); g2d__w(g2d__f(0.145f));
+    g2d__w(G2D_OP_WINDOW);
+    g2d__w(0x0000007Fu); g2d__w(0x01F001FFu);
+    g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu); g2d__w(0x00F8013Fu);
     for (cb = 1; cb < 32u; cb++) if (g2d__slots & (1u << cb)) g2d__color_header(cb);
     g2d__zc = G2D_ZBASE;
 }
