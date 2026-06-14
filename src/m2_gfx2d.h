@@ -246,12 +246,29 @@ static void g2d_tex_header(u32 hdr, int texx, int texy, int wbits, int hbits,
     g2d__w(th0); g2d__w(th1); g2d__w(th2); g2d__w(th3);
 }
 
-/* write 4 vertex UV pairs (pv,pu, 8.8 fixed texel coords) into texture_ram. */
+/* Write 4 vertex UV pairs (pv,pu order per vertex) into texture_ram.
+ * uv[] is given in PLAIN TEXEL COORDS (e.g. 0..31 for a 32-wide texture); we
+ * scale by 8 here because the GEO recovers the texel as pu_input/8 (it computes
+ * pu*(1/z)/8 then perspective-divides by 1/z -> pu_input/8). Passing raw texel
+ * coords without the x8 collapses sampling to texels 0..tex/8 (the "flat" bug). */
 static void g2d_tex_uv(u32 uvoff, const int uv[8]) {
     int i;
     g2d__w(G2D_OP_TEXDATA); g2d__w(G2D_TEXRAM_BIT | uvoff); g2d__w(8u);
-    for (i = 0; i < 8; i++) g2d__w((u32)uv[i] & 0xffffu);
+    for (i = 0; i < 8; i++) g2d__w(((u32)uv[i] << 3) & 0xffffu);
 }
+
+/* Direct-data "distance" word -> object.texlod in the GEO renderer. NOTE the
+ * GEO's geo_direct_data re-pushes this word with a >>8, so command_buffer[10] =
+ * (our word)>>8, and then:
+ *     texlod = ((command_buffer[10]>>8)&0x7f80) - 0x3f80
+ *            = ((our_word>>16)&0x7f80) - 0x3f80.
+ * Mip level = (-texlod + fast_log2(z)) >> 7, clamped to max_level (=4 for 32px),
+ * fast_log2(z) = log2(z) in 8.8 (~log2(z)*256). For 2D we want 1:1 texels
+ * (level 0). Painter z up to ~60 -> log2(60)*256 ~= 1512, so we need texlod >=
+ * 1512-127 ~= 1385. 0x45800000 -> texlod = 0x4580-0x3f80 = 0x600 (1536): level 0
+ * across z 4..60 with margin. (Pushing 0 gives texlod = -0x3f80 -> always max
+ * mip -> one averaged texel = the "textures render flat/black" bug.) */
+#define G2D_TEX_LOD0 0x45800000u
 
 /* textured quad (screen rect x,y,w,h) referencing UV block uvoff + header hdr */
 static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
@@ -264,7 +281,7 @@ static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
     g2d__w(g2d__f(a[0])); g2d__w(g2d__f(a[1])); g2d__w(g2d__f(a[2]));
     g2d__w(1u | (1u << 8) | (1u << 17));
     g2d__w(0xFFu << 23);
-    g2d__w(0u);
+    g2d__w(G2D_TEX_LOD0);                     /* texlod bias -> mip level 0 */
     g2d__w(g2d__f(c[0])); g2d__w(g2d__f(c[1])); g2d__w(g2d__f(c[2]));
     g2d__w(g2d__f(d[0])); g2d__w(g2d__f(d[1])); g2d__w(g2d__f(d[2]));
     g2d__w(0u); g2d__w(0u);
@@ -278,5 +295,87 @@ static void g2d_end(void) {
     for (i = 0; i < g2d__n; i++) buf[i] = g2d__buf[i];
     *(volatile u32 *)G2D_READ_REG = 0x10000u;
 }
+
+/* Submit an empty frame to wipe the polygon plane (e.g. before handing the screen
+ * back to a tile-only menu, so the last drawn frame doesn't linger). */
+static void g2d_clear(void) { g2d_begin(); g2d_end(); }
+
+/* ---- 3D vector primitives (real Z, depth-sorted) ------------------------- *
+ * The helpers above project screen pixels at an auto-assigned painter's-order Z.
+ * These instead take vertices ALREADY in direct_data space — projected as
+ * screen = G2D_CX + X/Z — and keep the real Z, so the GEO z-sorts them. That
+ * gives correct occlusion for a 3D vector scene (e.g. Tempest's tube). For a
+ * camera-space point (x,y,z) at focal f, supply (f*x, f*y, z). Call between
+ * g2d_begin()/g2d_end() like the others. */
+static void g2d_vquadl(const float v0[3], const float v1[3],
+                       const float v2[3], const float v3[3], u32 cb, u32 luma) {
+    if (g2d__n + 17 > 0x3000) return;         /* skip cleanly when the list is full */
+    g2d__w(G2D_OP_DIRECT);
+    g2d__w(0u);
+    g2d__w(G2D_TEXRAM_BIT | (cb * 4u));
+    g2d__w(g2d__f(v1[0])); g2d__w(g2d__f(v1[1])); g2d__w(g2d__f(v1[2]));
+    g2d__w(g2d__f(v0[0])); g2d__w(g2d__f(v0[1])); g2d__w(g2d__f(v0[2]));
+    g2d__w(1u | (1u << 8) | (1u << 17));      /* quad, linktype 1, doubleside */
+    g2d__w((luma & 0xFFu) << 23);
+    g2d__w(0u);
+    g2d__w(g2d__f(v2[0])); g2d__w(g2d__f(v2[1])); g2d__w(g2d__f(v2[2]));
+    g2d__w(g2d__f(v3[0])); g2d__w(g2d__f(v3[1])); g2d__w(g2d__f(v3[2]));
+    g2d__w(0u); g2d__w(0u);
+}
+static void g2d_vquad(const float v0[3], const float v1[3],
+                      const float v2[3], const float v3[3], u32 cb) {
+    g2d_vquadl(v0, v1, v2, v3, cb, 0xFFu);
+}
+/* thin-quad line a->b, full width w, widened perpendicular in the projected XY
+   plane; each end keeps its real Z. */
+static void g2d_vline(const float a[3], const float b[3], float w, u32 cb) {
+    float dx = b[0]-a[0], dy = b[1]-a[1];
+    float n = g2d__sqrt(dx*dx + dy*dy), hw = w * 0.5f, px, py;
+    float v0[3], v1[3], v2[3], v3[3];
+    if (n < 0.0001f) { px = hw; py = 0.0f; } else { px = -dy*hw/n; py = dx*hw/n; }
+    v0[0]=a[0]+px; v0[1]=a[1]+py; v0[2]=a[2];
+    v1[0]=a[0]-px; v1[1]=a[1]-py; v1[2]=a[2];
+    v2[0]=b[0]-px; v2[1]=b[1]-py; v2[2]=b[2];
+    v3[0]=b[0]+px; v3[1]=b[1]+py; v3[2]=b[2];
+    g2d_vquadl(v0, v1, v2, v3, cb, 0xFFu);
+}
+/* solid-fill triangle (degenerate quad) in direct_data space. */
+static void g2d_vtril(const float a[3], const float b[3], const float c[3], u32 cb, u32 luma) {
+    g2d_vquadl(a, b, c, c, cb, luma);
+}
+static void g2d_vtri(const float a[3], const float b[3], const float c[3], u32 cb) {
+    g2d_vquadl(a, b, c, c, cb, 0xFFu);
+}
+
+/* Project a CAMERA-space point (x,y,z) into a direct_data vertex for focal length
+   `focal`: direct_data projects screen = G2D_CX + X/Z (no focal), so pre-scale x,y
+   by focal. Feed `out` to the g2d_v* primitives. (This is the camera->screen bridge
+   the Tempest tube uses: t_v(v) == g2d_v3(out, T_FOCAL, v[0],v[1],v[2]).) */
+static void g2d_v3(float out[3], float focal, float x, float y, float z) {
+    out[0] = x * focal; out[1] = y * focal; out[2] = z;
+}
+
+/* Lambert-ish face luma for g2d_vquadl/g2d_vtril: ambient + diffuse*|n.l|/|n|, with
+   (nx,ny,nz) the (unnormalized) face normal and (lx,ly,lz) the light direction.
+   Lets flat panels read as shaded 3D (e.g. Tempest's tube wall). */
+static u32 g2d_luma(float nx, float ny, float nz, float lx, float ly, float lz) {
+    float nn = g2d__sqrt(nx*nx + ny*ny + nz*nz);
+    float nd = nn > 1e-6f ? (nx*lx + ny*ly + nz*lz) / nn : 0.0f;
+    if (nd < 0.0f) nd = -nd;
+    if (nd > 1.0f) nd = 1.0f;
+    return 0x40u + (u32)(nd * 191.0f);          /* ambient 0x40 + diffuse up to 0xFF */
+}
+
+/* ---- z-sort granularity --------------------------------------------------- *
+ * The GEO buckets primitives by Z at this granularity before painter-drawing them.
+ * COARSE (the g2d_begin default) is fine for 2D painter's order. But in a 3D vector
+ * scene where an overlay line lies ON a filled surface (wireframe-on-panel), the two
+ * are coplanar: at COARSE granularity they land in the same bucket, TIE, and the
+ * panel hides the line. Call g2d_zsort_fine() right after g2d_begin() so a small
+ * forward Z bias on the lines reliably wins. (Learned porting Tempest's shaded tube.) */
+#define G2D_ZSORT_COARSE 0x40800000u   /* ~4.0  — 2D painter's order            */
+#define G2D_ZSORT_FINE   0x3C23D70Au   /* ~0.01 — 3D coplanar overlay separation */
+static void g2d_zsort(u32 mode) { g2d__w(G2D_OP_ZSORT); g2d__w(mode); }
+static void g2d_zsort_fine(void) { g2d_zsort(G2D_ZSORT_FINE); }
 
 #endif /* M2_GFX2D_H */
