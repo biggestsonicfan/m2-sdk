@@ -292,6 +292,69 @@ static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
     g2d__w(0u); g2d__w(0u);
 }
 
+/* ---- textured bitmap font (atlas glyphs via the texture pipeline) -------- *
+ * Uploads the built-in 8x8 font (gFont) into texram0 as a 128x64 atlas (a 16x8
+ * grid of glyphs), then draws each glyph as ONE textured+transparent quad --
+ * one poly per glyph instead of the flat-quad g2d_text's dozens, with free
+ * colorbase tint and transparency over any background.
+ *
+ * QUALITY NOTE: the GEO texture unit is always BILINEAR and the transparent path
+ * expands ink by ~half a texel (the 50%-alpha cutoff, model2rd.ipp:189/325), and
+ * the GEO image is itself rescaled to the display -- so this SOFTENS a 1-bit 8px
+ * font (strokes thicken/merge as you scale up). For crisp small UI text prefer
+ * the nearest-style flat-quad g2d_text; reach for g2d_ttext when you want smooth
+ * scaled-up text, a tinted/transparent string, or to save display-list space.
+ * The atlas occupies texram0 (0,0)..(128,64); keep other textures off that area. */
+#define G2D_FONT_HDR  0x100u    /* texture_ram slot: atlas header (4 words)   */
+#define G2D_FONT_UV   0x108u    /* texture_ram slot: per-glyph UVs (8 words)  */
+
+/* Upload gFont -> texram0 atlas. Call ONCE after g2d_init (writes texels via the
+ * CPU, not the display list). Ink (any nonzero font nibble; the font uses small
+ * values 1/2, not 15) -> bright texel 14; background 0 -> texel 0xf (transparent
+ * in the translucent renderer). */
+static void g2d_font_atlas(void) {
+    int c, gy, gx;
+    for (c = 0; c < 128; c++) {
+        const u8 *g = gFont + (u32)c * 32;
+        int ax = (c & 15) * 8, ay = (c >> 4) * 8;
+        for (gy = 0; gy < 8; gy++)
+            for (gx = 0; gx < 8; gx++) {
+                u8 v = g[gy * 4 + (gx >> 1)];
+                int ink = (gx & 1) ? (v >> 4) : (v & 0x0f);
+                g2d_texel(ax + gx, ay + gy, (u8)(ink ? 14 : 0x0f));
+            }
+    }
+}
+
+/* Draw text with the textured font atlas. cb = colorbase hue; each glyph is
+ * 8*scale px wide. Call between g2d_begin()/g2d_end(); run g2d_font_atlas() once
+ * beforehand. Glyphs reuse one UV slot, rewritten before each quad (the GEO
+ * captures the UVs into each polygon as it parses the list, in order). */
+static void g2d_ttext_scaled(float x, float y, const char *s, u32 cb, float scale) {
+    int i;
+    float gw = 8.0f * scale;
+    /* atlas header: 128x64 (wbits=2,hbits=1), sheet0, transparent(bit13)+textured(bit14) */
+    g2d__w(G2D_OP_TEXDATA); g2d__w(G2D_TEXRAM_BIT | G2D_FONT_HDR); g2d__w(4u);
+    g2d__w(0x6000u | 2u | (1u << 3));       /* th0 */
+    g2d__w(0u);                             /* th1 lumabase 0 */
+    g2d__w(0u);                             /* th2 texx=0 texy=0 sheet0 */
+    g2d__w((cb & 0x3ffu) << 6);             /* th3 colorbase */
+    for (i = 0; s[i]; i++) {
+        int c = (u8)s[i] & 0x7f;
+        int u0 = (c & 15) * 8, v0 = (c >> 4) * 8;
+        int uv[8];                          /* TL,TR,BR,BL order (pv,pu) */
+        uv[0] = v0;     uv[1] = u0;         /* maps screen px i -> texel u0+i at 1:1 */
+        uv[2] = v0;     uv[3] = u0 + 8;
+        uv[4] = v0 + 8; uv[5] = u0 + 8;
+        uv[6] = v0 + 8; uv[7] = u0;
+        g2d_tex_uv(G2D_FONT_UV, uv);
+        g2d_tquad(x + (float)i * gw, y, gw, gw, G2D_FONT_UV, G2D_FONT_HDR);
+    }
+}
+static void g2d_ttext(float x, float y, const char *s, u32 cb) {
+    g2d_ttext_scaled(x, y, s, cb, 1.0f);
+}
+
 /* Submit the frame to the GEO (it rasterizes on the next vblank). */
 static void g2d_end(void) {
     volatile u32 *buf = (volatile u32 *)(G2D_BUFFERRAM + 0x10000u);
