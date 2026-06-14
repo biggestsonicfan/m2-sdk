@@ -324,9 +324,11 @@ static void g2d_font_atlas(void) {
                 /* gFont is two-layer: nibble 1 = letter strokes, 2 = fill/shadow.
                  * Use only the strokes (value 1) so counters stay open and glyphs
                  * read cleanly; value 2 alone would fill letters into blobs.
-                 * Write the column mirrored (7-gx): the GEO samples a textured quad
-                 * mirrored in U, so storing each glyph flipped renders it upright. */
-                g2d_texel(ax + (7 - gx), ay + gy, (u8)(ink == 1 ? 14 : 0x0f));
+                 * gFont packs each row's columns as two 4-px halves, right-half
+                 * first AND each half reversed, relative to screen order. Undo with
+                 * a horizontal half-swap then a flip: dst col = 7 - ((gx+4)&7).
+                 * Verified against the source in tools/fontdump.py (swapx+flipx). */
+                g2d_texel(ax + (7 - ((gx + 4) & 7)), ay + gy, (u8)(ink == 1 ? 14 : 0x0f));
             }
     }
 }
