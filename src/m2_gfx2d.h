@@ -246,11 +246,16 @@ static void g2d_tex_header(u32 hdr, int texx, int texy, int wbits, int hbits,
     g2d__w(th0); g2d__w(th1); g2d__w(th2); g2d__w(th3);
 }
 
-/* Write 4 vertex UV pairs (pv,pu order per vertex) into texture_ram.
- * uv[] is given in PLAIN TEXEL COORDS (e.g. 0..31 for a 32-wide texture); we
- * scale by 8 here because the GEO recovers the texel as pu_input/8 (it computes
- * pu*(1/z)/8 then perspective-divides by 1/z -> pu_input/8). Passing raw texel
- * coords without the x8 collapses sampling to texels 0..tex/8 (the "flat" bug). */
+/* Write 4 vertex UV pairs into texture_ram, each pair (pv, pu) i.e. V then U.
+ * The 4 vertices are in g2d_tquad's order: TL, TR, BR, BL (top-left, top-right,
+ * bottom-right, bottom-left) -- so a normal upright mapping of a WxH texture is
+ *   { 0,0,  0,W-1,  H-1,W-1,  H-1,0 }.  (g2d_tquad pushes pts b,a,c,d which the
+ * GEO reads back as v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL; getting this order wrong
+ * twists the top edge's U opposite the bottom -> a diagonal warp/swirl.)
+ * uv[] is in PLAIN TEXEL COORDS (e.g. 0..31 for a 32-wide texture); we scale by
+ * 8 here because the GEO recovers the texel as pu_input/8 (it computes pu*(1/z)/8
+ * then perspective-divides by 1/z). Without the x8, sampling collapses to texels
+ * 0..tex/8 (the "flat" bug). */
 static void g2d_tex_uv(u32 uvoff, const int uv[8]) {
     int i;
     g2d__w(G2D_OP_TEXDATA); g2d__w(G2D_TEXRAM_BIT | uvoff); g2d__w(8u);
