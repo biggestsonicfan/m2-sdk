@@ -1,0 +1,7 @@
+build_cmake/
+roms/
+temp/
+*.o
+*.elf
+*.bin
+game.map
