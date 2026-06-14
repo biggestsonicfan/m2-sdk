@@ -309,9 +309,9 @@ static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
 #define G2D_FONT_UV   0x108u    /* texture_ram slot: per-glyph UVs (8 words)  */
 
 /* Upload gFont -> texram0 atlas. Call ONCE after g2d_init (writes texels via the
- * CPU, not the display list). Ink (any nonzero font nibble; the font uses small
- * values 1/2, not 15) -> bright texel 14; background 0 -> texel 0xf (transparent
- * in the translucent renderer). */
+ * CPU, not the display list). Stroke pixels (font nibble == 1) -> bright texel 14;
+ * everything else (fill/shadow nibble 2, or empty 0) -> texel 0xf (transparent in
+ * the translucent renderer). Columns are de-scrambled per the comment below. */
 static void g2d_font_atlas(void) {
     int c, gy, gx;
     for (c = 0; c < 128; c++) {
