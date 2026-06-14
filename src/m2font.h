@@ -1,6 +1,13 @@
-/* font.h */
+/* font.h
+ *
+ * 8x8 bitmap font (gFont). Credit: Steve J's Daytona USA Test ROM project
+ *   https://github.com/stevej0/DaytonaTestRom
+ *
+ * Two-layer 4bpp glyphs: nibble value 1 = letter strokes, value 2 = fill/shadow.
+ * (m2_gfx2d.h's g2d_font_atlas() inks value 1 for clean glyphs.)
+ */
 
-const unsigned char gFont[] = 
+const unsigned char gFont[] =
 {
 	0x00,0x00,0x00,0x00,
 	0x00,0x00,0x00,0x00,

@@ -18,6 +18,25 @@ Build a different program with `-DM2_GAME=<name>` (compiles `src/<name>.c`).
 Drop your own `.c` in `src/` and reconfigure. Or use the equivalent batch script:
 `cmd /c ".\build_clang64.bat demo"`.
 
+### Soft-float (real hardware / m2emulator)
+
+**m2emulator does not emulate the i960's FPU** — native i960 FP opcodes
+(`mulr`/`addr`/`cvtir`/…) run on MAME's i960 core (and the real Model 2 i960KB,
+which has a working FPU) but are **invalid opcodes on m2emulator**. To run there,
+build soft-float so every float op becomes a libgcc call (zero i960 FP):
+
+```sh
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_SOFTFLOAT=ON
+```
+
+`M2_SOFTFLOAT` (and the `m2sdk_softfloat()` helper) live in
+[`cmake/m2sdk.cmake`](cmake/m2sdk.cmake); a consumer includes it and calls the
+helper. It applies `-msoft-float`, links the soft-float libgcc, and aliases the
+`-fleading-underscore` libcalls (`___mulsf3` → `__mulsf3`). Note: g2d's
+`direct_data` rendering is MAME-HLE-only regardless — a hardware build must use
+the `object_data` path (`geo_obj_*` / m2_geo.h). See m2-snake's Tempest, which
+selects render path + soft-float together via its `-DM2_HW` profile.
+
 `src/demo.c` is a ~40-line example: a bouncing ball, frame, slider and line, all
 drawn with the hardware-2D API.
 
@@ -70,3 +89,8 @@ lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum
 tools/    stfbin2rom.py (split the ROM image), bin2c.py
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```
+
+## Credits
+
+- 8×8 bitmap font (`src/m2font.h`): Steve J's Daytona USA Test ROM project —
+  https://github.com/stevej0/DaytonaTestRom
