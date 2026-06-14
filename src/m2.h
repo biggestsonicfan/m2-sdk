@@ -44,11 +44,15 @@ typedef unsigned int   u32;
 #define M2_IN1       (*(volatile u8  *)0x01C00004u)  /* P1 (active-low)             */
 #define M2_IN2       (*(volatile u8  *)0x01C00006u)  /* P2 (active-low)             */
 
-/* Launcher app-exit hook (a fixed cell in the 8 MB ext-RAM window): when armed,
- * m2_vsync() returns to the handler on P1 Start, so a launcher can stop ANY app.
- * A launcher arms it (m2_exit_arm) before running an app and disarms it for its
- * own UI; left uninitialized it never triggers. [0]=magic, [1]=handler addr. */
-#define M2_EXIT_CTL   0x043FE020u
+/* Launcher app-exit hook (a fixed cell in real work RAM, above the heap and below
+ * the i960 fault/interrupt tables at 0x5ff000): when armed, m2_vsync() returns to
+ * the handler on P1 Start, so a launcher can stop ANY app. A launcher arms it
+ * (m2_exit_arm) before running an app and disarms it for its own UI. MUST be
+ * disarmed once at boot before the first m2_vsync (work RAM powers up with
+ * garbage). [0]=magic, [1]=handler addr.
+ * (Was 0x043FE020 in the 8 MB ext-RAM window — that address is unmapped on real
+ * hardware, so m2_vsync read garbage and jumped to a bad handler = invalid op.) */
+#define M2_EXIT_CTL   0x005F8000u
 #define M2_EXIT_MAGIC 0x45584954u    /* 'EXIT' */
 
 #define M2_RENDERMODE (*(volatile u16 *)0x10000000u)
