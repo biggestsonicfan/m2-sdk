@@ -234,8 +234,8 @@ static void m2_init(void) {
     m2_setpal(0, 0);          /* default backdrop = black (games may override) */
 
     M2_RENDERMODE = 0x04;
-    M2_HSYNC = (u16)-84;
-    M2_VSYNC = (u16)-2;
+    M2_HSYNC = (u16)-84;        /* 0xFFAC — matches STF start_again_ip */
+    M2_VSYNC = (u16)-3;         /* 0xFFFD — STF's value (was -2/0xFFFE, one line off) */
     M2_VIDEO_CTRL = 0;
     M2_L1_HPOS = 0; M2_L1_VPOS = 0;            /* FG layer A: on, no scroll  */
     M2_L2_HPOS = 0; M2_L2_VPOS = 0x8000;       /* BG layer B: off            */
