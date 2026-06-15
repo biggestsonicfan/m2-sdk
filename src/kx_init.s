@@ -186,13 +186,39 @@ start_ip:
 loop_copy_cpu_ctrl_wait_data:
 		ld      (g1),g2
 		cmpo    g2,g3
-		be      copy_rom_to_main_ram
+		be      clear_work_ram
 		st      g2,(g0)
 		addo    4,g0,g0
 		addo    4,g1,g1
 		b       loop_copy_cpu_ctrl_wait_data
 
-copy_rom_to_main_ram:	
+# --
+# --  Blanket-zero work RAM the way Sonic the Fighters does in start_ip, BEFORE the
+# --  copros are booted and BEFORE the intr-table/PRCB are moved into 0x5FF000+.
+# --  STF clears 0x500000..0x59CFE0 then 0x59D000..0x600000, deliberately preserving
+# --  the 32-byte gap at 0x59CFE0 (a boot scratch region). The GEO/object_data path
+# --  reads scratch all over this region, so leaving it as garbage is a likely reason
+# --  object_data renders on STF but not on us. (Cold-boot path only; the "rs" re-entry
+# --  at _reinit_iac is below this, so a soft reset won't re-clear the RAM-based PRCB.)
+clear_work_ram:
+		lda     0x500000,r14				# RAMBASE_START
+		mov     0,r15
+		lda     160760,r13					# -> 0x59CFE0
+clear_work_ram_lo:
+		st      r15,(r14)
+		lda     4(r14),r14
+		cmpdeco 1,r13,r13
+		bl      clear_work_ram_lo
+		lda     0x59D000,r14				# skip the 32-byte gap at 0x59CFE0
+		mov     0,r15
+		lda     101376,r13					# -> 0x600000
+clear_work_ram_hi:
+		st      r15,(r14)
+		lda     4(r14),r14
+		cmpdeco 1,r13,r13
+		bl      clear_work_ram_hi
+
+copy_rom_to_main_ram:
 		shlo    17,1,g0						# g0 = 0x20000
 		lda     0x0,g4						# g4 = 0x0
 		lda     0x0,g1						# g1 = 0x1
@@ -698,7 +724,7 @@ _cpu_ctrl_wait_data:				# bus-controller (0xE00000) region config.
 		.word	0xffffffff
 
 irq_control_word:
-		.word	0x0f0e0d0c 
+		.word	0xff000010
 
 
 
