@@ -724,7 +724,10 @@ _cpu_ctrl_wait_data:				# bus-controller (0xE00000) region config.
 		.word	0xffffffff
 
 irq_control_word:
-		.word	0xff000010
+		.word	0x0f0e0d0c					# STF interrupt_targets (was 0xff000010,
+											# the IAC-port addr — a bogus IMAP value).
+											# Benign while we run at priority 31, but
+											# now correct/faithful per STF start_again_ip.
 
 
 

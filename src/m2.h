@@ -255,7 +255,30 @@ static void m2_init(void) {
     m2_cleartiles(m2_tile(0, 0x20));
     for (i = 0; i < (int)(M2_W * 64u); i++) M2_TILE_BG[i] = m2_tile(0, 0x20);
 
-    M2_IO_ENABLE = 1;
+    /* I/O + serial bring-up, faithful to STF start_again_ip (_disable_ints).
+     * REAL-HARDWARE init: in MAME the 8251 is a separate chip and the 315-5649's
+     * extended regs (0x24 / 0x34-0x3A) are unmapped (and 0x40 is nopw), so all of
+     * this is inert there — but silicon needs it. */
+    {
+        volatile u16 *uart_ctl = (volatile u16 *)0x01C80002u;  /* i8251 control reg */
+        volatile u8  *io       = (volatile u8  *)0x01C00000u;  /* 315-5649 I/O chip */
+        volatile int d;
+        /* i8251 aux UART: 3 null/sync writes, internal reset (0x40), then mode
+         * 0x4E (async x16, 8 data, 1 stop, no parity) — STF's exact sequence with
+         * its short inter-write settle delay. */
+        *uart_ctl = 0x00; for (d = 4; d > 0; d--) { }
+        *uart_ctl = 0x00; for (d = 4; d > 0; d--) { }
+        *uart_ctl = 0x00; for (d = 4; d > 0; d--) { }
+        *uart_ctl = 0x40; for (d = 4; d > 0; d--) { }
+        *uart_ctl = 0x4E;
+        /* 315-5649 handshake: 0x40<-0, 0x24<-1, then the "SEGA" signature at
+         * 0x34/0x36/0x38/0x3A (replaces the old M2_IO_ENABLE=1, which wrote 1 to
+         * 0x40 — the wrong reg per STF). */
+        io[0x40] = 0x00;
+        io[0x24] = 0x01;
+        io[0x34] = 'S'; io[0x36] = 'E'; io[0x38] = 'G'; io[0x3A] = 'A';
+    }
+
     M2_IRQ_ENA = M2_IRQ_VBL;       /* enable vblank source (written twice — */
     M2_IRQ_ENA = M2_IRQ_VBL;       /* gcc960 -O2 g14 workaround)            */
 }
