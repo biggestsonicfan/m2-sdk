@@ -29,6 +29,11 @@ static void m2__copro_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
     u32 save = *ctl;
     int i;
     *ctl = save | 0x80000000u;                              /* halt + count=0   */
+    /* Release the coprocessors from reset (clear bits 0,1 of 0x980020). The real
+     * firmware's b_crx_copro_down / copro_down2 do this; 0x980020 is NOT mapped in
+     * MAME (so the HLE never needed it), but on real silicon the SHARC stays held
+     * in reset without it -> streaming firmware + triggering the GEO then faults. */
+    *(volatile u32 *)0x00980020u = *(volatile u32 *)0x00980020u & 0xFFFFFFFCu;
     *(volatile u32 *)(iop_base + 0x000) = syscon0;          /* SYSCON           */
     *(volatile u32 *)(iop_base + 0x000) = 0;
     *(volatile u32 *)(iop_base + 0x008) = dmacfg;
@@ -168,7 +173,14 @@ static void m2_cop_rmatrix(float m[12]) {
 
 /* Route scalar float math through native i960 ops (the COP helpers above stay defined
    for anyone who needs them, but every module compiled after this point -- m2_geo.h and
-   the games -- uses the native path). Big perf win for the 3D games. */
+   the games -- uses the native path). Big perf win for the 3D games on MAME.
+   NOTE: native ops emit i960 hardware FP (mulr/addr/cvtir...), which MAME's i960 core
+   and the real Model 2 i960KB (it has an FPU) run, but which m2emulator does NOT
+   emulate -> INVALID OPCODES on m2emulator. Define M2_NO_FASTMATH (e.g. an m2emulator
+   build) to keep the COP-FIFO math path, which uses no i960 FP -- slower, but the COP
+   does the float. (Or use -msoft-float / M2_SOFTFLOAT for a fully FP-free binary.) */
+#ifndef M2_NO_FASTMATH
 #include "m2_fastmath.h"
+#endif
 
 #endif /* M2_3D_H */
