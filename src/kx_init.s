@@ -362,15 +362,9 @@ _switch_proc_pri_low:
 
 
 
-		.globl		_init_fp
-_init_fp:
-
-		# initialize floating point registers to 0 values
-		cvtir		0, fp0
-		movre		fp0, fp1
-		movre		fp1, fp2
-		movre		fp2, fp3
-		ret
+# _init_fp removed: it was never called (the only callx was commented out) and its
+# cvtir/movre are i960 hardware-FP opcodes, which m2emulator (no FPU emulation) treats
+# as invalid. Dropping it keeps soft-float (M2_SOFTFLOAT) ROMs provably FP-free.
 
 
 _move_data_area:
@@ -686,16 +680,16 @@ L0b14:
 		ret
 
 
-_cpu_ctrl_wait_data:
-		.word	0x00000004
-		.word	0x00000002
-		.word	0x00000042
-		.word	0x00000002
+_cpu_ctrl_wait_data:				# bus-controller (0xE00000) region config.
+		.word	0x00000004			# Corrected to match STF's _wait_data exactly:
+		.word	0x00000002			# entries 4,5,8 were wrong (0x10,0x10,0x08), which
+		.word	0x00000042			# left the COP region's bus timing misconfigured so
+		.word	0x00000002			# 0x8C0000 never asserted READY (boot hung at the
+		.word	0x00000001			#  [4] was 0x10  first COP IOP write on real hardware).
+		.word	0x00000002			#  [5] was 0x10
 		.word	0x00000010
 		.word	0x00000010
-		.word	0x00000010
-		.word	0x00000010
-		.word	0x00000008
+		.word	0x00000020			#  [8] was 0x08
 		.word	0x00000010
 		.word	0x00000010
 		.word	0x00000010
