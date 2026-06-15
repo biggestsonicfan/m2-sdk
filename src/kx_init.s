@@ -92,12 +92,13 @@ system_address_table:
 		.space		8
 
 		.word		sys_proc_table			# 152 - initialization words
-		.word		0x304000fb
+		.word		0xfc00a3				# STF value (was 0x304000fb) — supervisor
+										# proc-table descriptor, dormant for us
 	
 		.space		8
 
 		.word		fault_proc_table		# 168 - initialization words
-		.word		0x304000fb
+		.word		0xfc00a3				# STF value (was 0x304000fb)
 	
 
 # ------ initial PRCB
