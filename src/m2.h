@@ -75,6 +75,25 @@ typedef unsigned int   u32;
 #define M2_IRQ_ENA (*(volatile u32 *)0x00E80004u)
 #define M2_IRQ_VBL 0x00000001u
 
+/* ---- i8251 aux UART (board -> host debug serial) -------------------------- *
+ * The standard async UART at SERIAL_START=0x1C80000 (data) / 0x1C80002 (cmd on
+ * write, status on read). m2_init runs House of the Dead's _InitSerial sequence
+ * (...0x4E mode, 0x37 command = TxEN|RxEN), so after m2_init these transmit a
+ * byte/string to a host terminal. TxRDY = status bit0; the wait is bounded so a
+ * disconnected UART can't hang the board. This is the developer feedback channel
+ * (the 315-5649 at 0x1C00000 is the on-board I/O link, not a path to a PC). */
+#define M2_UART_DATA (*(volatile u16 *)0x01C80000u)
+#define M2_UART_STAT (*(volatile u16 *)0x01C80002u)   /* read: 8251 status; bit0 = TxRDY */
+static void m2_uart_putc(char c) {
+    u32 g = 0;
+    while (!(M2_UART_STAT & 0x01u) && ++g < 200000u) { }
+    M2_UART_DATA = (u16)(u8)c;
+}
+static void m2_uart_puts(const char *s) { while (*s) m2_uart_putc(*s++); }
+static void m2_uart_hex(u32 v) {           /* "XXXXXXXX" big-endian nibbles */
+    int i; for (i = 28; i >= 0; i -= 4) m2_uart_putc("0123456789ABCDEF"[(v >> i) & 0xF]);
+}
+
 #define M2_W     64u           /* hardware tilemap stride (tiles)  */
 #define M2_PRIO  0x8000u       /* tile entry bit15: above-3D category */
 #define M2_RGB(r,g,b) ((u16)(((b) << 10) | ((g) << 5) | (r)))
@@ -263,14 +282,16 @@ static void m2_init(void) {
         volatile u16 *uart_ctl = (volatile u16 *)0x01C80002u;  /* i8251 control reg */
         volatile u8  *io       = (volatile u8  *)0x01C00000u;  /* 315-5649 I/O chip */
         volatile int d;
-        /* i8251 aux UART: 3 null/sync writes, internal reset (0x40), then mode
-         * 0x4E (async x16, 8 data, 1 stop, no parity) — STF's exact sequence with
-         * its short inter-write settle delay. */
+        /* i8251 aux UART, matching House of the Dead _InitSerial exactly: 3 null/
+         * sync writes, internal reset (0x40), mode 0x4E (async x16, 8-N-1), then the
+         * COMMAND byte 0x37 (TxEN|DTR|RxEN|ErrReset|RTS) — we were MISSING 0x37,
+         * which is what actually enables the transmitter/receiver. */
         *uart_ctl = 0x00; for (d = 4; d > 0; d--) { }
         *uart_ctl = 0x00; for (d = 4; d > 0; d--) { }
         *uart_ctl = 0x00; for (d = 4; d > 0; d--) { }
-        *uart_ctl = 0x40; for (d = 4; d > 0; d--) { }
-        *uart_ctl = 0x4E;
+        *uart_ctl = 0x40; for (d = 4; d > 0; d--) { }   /* internal reset  */
+        *uart_ctl = 0x4E; for (d = 4; d > 0; d--) { }   /* mode: 8-N-1 x16 */
+        *uart_ctl = 0x37;                                /* command: TxEN|RxEN */
         /* 315-5649 handshake: 0x40<-0, 0x24<-1, then the "SEGA" signature at
          * 0x34/0x36/0x38/0x3A (replaces the old M2_IO_ENABLE=1, which wrote 1 to
          * 0x40 — the wrong reg per STF). */
