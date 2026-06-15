@@ -233,7 +233,7 @@ static void m2_init(void) {
     m2__build_colorxlat();
     m2_setpal(0, 0);          /* default backdrop = black (games may override) */
 
-    M2_RENDERMODE = 0x04;
+    M2_RENDERMODE = 0x4004;     /* STF start_again_ip writes 0x4004 to 0x10000000 (was 0x04) */
     M2_HSYNC = (u16)-84;        /* 0xFFAC — matches STF start_again_ip */
     M2_VSYNC = (u16)-3;         /* 0xFFFD — STF's value (was -2/0xFFFE, one line off) */
     M2_VIDEO_CTRL = 0;
