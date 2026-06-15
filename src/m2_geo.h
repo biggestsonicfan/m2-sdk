@@ -267,6 +267,50 @@ static void geo_flush(u32 read_start) {
     *(volatile u32 *)GEO_READ_REG = read_start;
 }
 
+/* ---- STF-faithful 4-buffer rotating display list -------------------------- *
+ * STF (Ghidra: geo_initialize @0x169c, set_end_mark @0x354c; g10=GEO_START
+ * 0x800000) builds each frame into one of FOUR bufferram buffers and commits it
+ * to geo_read_start (0x803008), then rotates to the next. The 4 buffers are
+ * BUFF_RAM 0x900000/0x908000/0x910000/0x918000 = bufferram offsets 0/0x8000/
+ * 0x10000/0x18000 (read/write_start mask to the 0xfffff window). The GEO renders
+ * the committed buffer while the i960 fills the next, so it never parses a
+ * half-built list (which a single fixed buffer risks). STF's 0xf0f write to the
+ * END register is just the END opcode (0x07800f0f) — already our geo_end() word. */
+#define GEO_CTL_REG     0x0098000Cu   /* STF clears this in geo_initialize        */
+#define GEO_WRITE_REG   0x00801008u   /* geo_write_start  (g10+0x1008)            */
+#define GEO_ZCLIP_REG   0x0181C000u   /* _3D_ZCLIP_START                          */
+#define GEO_NBUF        4u
+static const u32 geo_buf_off[GEO_NBUF] = { 0x00000u, 0x08000u, 0x10000u, 0x18000u };
+static u32 g_geo_buf;                  /* current build buffer (0..3)             */
+
+/* One-time GEO display-list setup (STF geo_initialize): clear GEO ctl, prime the
+ * four buffers empty, point the GEO at buffer 0, set ZCLIP. Call after the GEO is
+ * booted, before the first frame. */
+static void geo_initialize(void) {
+    u32 b;
+    *(volatile u32 *)GEO_CTL_REG = 0u;                    /* clear GEO ctl (0x98000c) */
+    for (b = 0; b < GEO_NBUF; b++)                        /* each buffer = empty list */
+        *(volatile u32 *)(GEO_BUFFERRAM + geo_buf_off[b]) = GEO_OP_END;
+    g_geo_buf = 0u;
+    *(volatile u32 *)GEO_WRITE_REG = geo_buf_off[1];      /* next write target        */
+    *(volatile u32 *)GEO_READ_REG  = geo_buf_off[0];      /* GEO reads buffer 0       */
+    *(volatile u8  *)GEO_ZCLIP_REG = 0xFFu;               /* ZCLIP                    */
+}
+
+/* Commit the built list into the current buffer, point the GEO at it, then rotate
+ * to the next buffer (STF set_end_mark). Use in place of geo_flush() for the
+ * double-buffered draw loop. Each buffer is 0x8000 bytes (0x2000 u32) — exactly
+ * the g_geo[] cap — and the list self-terminates with GEO_OP_END. */
+static void geo_flush_flip(void) {
+    u32 off = geo_buf_off[g_geo_buf];
+    volatile u32 *buf = (volatile u32 *)(GEO_BUFFERRAM + off);
+    u32 i;
+    for (i = 0; i < g_geo_n; i++) buf[i] = g_geo[i];
+    *(volatile u32 *)GEO_READ_REG = off;                 /* commit -> display        */
+    g_geo_buf = (g_geo_buf + 1u) & 3u;                   /* flip                     */
+    *(volatile u32 *)GEO_WRITE_REG = geo_buf_off[g_geo_buf];
+}
+
 /* Flush an empty list so the GEO renders nothing (clears the 3D plane, e.g. when
    a 3D game returns to the 2D launcher menu). */
 static void geo_clear(void) { geo_begin(); geo_end(); geo_flush(0x10000u); }
