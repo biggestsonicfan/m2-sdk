@@ -35,20 +35,23 @@ _user_NMI:
 
 
 _irq_vblank:
-	stq     g0,(sp)
-	addo    16,sp,sp
-	stq     g4,(sp)
-	addo    16,sp,sp
-	stq     g8,(sp)
-	addo    16,sp,sp
-	stq     g12,(sp)
-	addo    16,sp,sp				# push to stack
+	# NINDY interrupt-handler prologue: reserve a 64-byte scratch frame ABOVE sp
+	# FIRST, then save g0..g14 at negative offsets. The last is `stt` (TRIPLE:
+	# g12/g13/g14) — NEVER a `stq` (which would also save g15 = fp). Hand-rolling sp
+	# and saving fp (the old code) corrupts the i960 return frame and the interrupt
+	# return jumps into the stack (m2emu: invalid opcode at _nindy_stack+0x48).
+	ldconst 64, r4
+	addo    sp, r4, sp
+	stq     g0,  -64(sp)
+	stq     g4,  -48(sp)
+	stq     g8,  -32(sp)
+	stt     g12, -16(sp)			# g12,g13,g14 only (leave g15/fp alone)
 
 	mov     0,g14
 
 	ld		_frameVBL,g0
 	addi    1,g0,g0
-	st		g0,_frameVBL			# increase frame counter
+	st		g0,_frameVBL			# frameVBL++
 
 	ld		_RAMBASE_START,g0
 	addi    1,g0,g0
@@ -58,15 +61,10 @@ _irq_vblank:
 	subo    2,0,g1					# g1 = 0xFFFFFFFE (clear vblank bit0; STF VsyncScr + m2_vsync)
 	st      g1,(g0)					# ack vblank irq
 
-	subo    16,sp,sp
-	ldq     (sp),g12
-	subo    16,sp,sp
-	ldq     (sp),g8
-	subo    16,sp,sp
-	ldq     (sp),g4
-	subo    16,sp,sp
-	ldq     (sp),g0					# pop from stack
-
+	ldq     -64(sp), g0
+	ldq     -48(sp), g4
+	ldq     -32(sp), g8
+	ldt     -16(sp), g12			# matching triple restore
 	ret
 
 # ---- STF interrupt-table ISRs (vectors 13/14/15 + 8-11/16+) -----------------
