@@ -327,10 +327,15 @@ start_again_ip:
 											# simulated interrupt-return, so the armed vblank
 											# IRQ is later taken from a clean frame (STF parity)
 
-		# NO _nindy_stack override: STF never resets fp/sp here — main runs on the
-		# supervisor stack the IAC/PRCB/sys_proc_table set up. Overriding it with a
-		# NINDY-monitor user stack (in supervisor mode) is the mismatch the m2emu
-		# interrupt path corrupted (crash always landed at _nindy_stack+0x8).
+		# crtm2 step: switch to the application's OWN stack before entering main
+		# (NINDY manual 5-14/5-16 + crtnin.s). The app MUST NOT run on the interrupt
+		# stack — when the vblank IRQ fires the i960 switches to _intr_stack, so a main
+		# running there gets its frame clobbered by the ISR (that was the _intr_stack+8
+		# crash). _nindy_stack lives in the free low region, well clear of _intr_stack
+		# (0x5FF500) and M2_EXIT_CTL (0x5F8000).
+		lda		_nindy_stack, fp			# application stack base
+		lda		-0x40(fp), pfp				# pfp (just in case; the app never returns)
+		lda		0x40(fp), sp				# current stack ptr
 
 		mov		0, g14						# g14 used by C compiler
 											# for argument lists of
@@ -373,11 +378,9 @@ call_main:
 		modpc	r4, r4, r5					# PC priority -> 0 (enable interrupts)
 
 		mov		0, g14						# compiler expects g14 = 0
-		b		_main						# STF does `b main`: run main in the established
-											# start_again_ip/fix_stack frame, NOT a fresh call
-											# frame. The call frame's RIP slot was exactly where
-											# the interrupt corruption landed (_nindy_stack+0x48)
-											# on m2emu. main never returns, so no call is needed.
+		callx	_main						# crtm2: enter the app via a real call frame on its
+											# own stack (NINDY crtnin.s does `callx _main`); main
+											# never returns.
 
 end_code_loop2:
 		bl		end_code_loop2
@@ -764,12 +767,12 @@ reinitialize_iac:
 # (_nindy_stack=0x502000, _intr_stack=0x504000 jammed together) let the vblank ISR
 # smash the user stack on m2emu (invalid opcode at 0x502048). _intr/_trap match STF
 # exactly; the user stack sits in the free region just below them.
-		.set	_nindy_stack, 0x005F0000	# user/main stack: above heap end (0x5F0000),
-											# below M2_EXIT_CTL (0x5F8000) and the tables.
-											# NOT 0x5F8000 — that is M2_EXIT_CTL, which
-											# m2_vsync reads + calls through every frame; a
-											# stack there got read as a function pointer ->
-											# wild call (invalid opcode at 0x548008).
+		.set	_nindy_stack, 0x00520000	# application's OWN stack (crtm2): low free region
+											# above .bss, far from the high interrupt stack
+											# (0x5FF500) and M2_EXIT_CTL (0x5F8000). main runs
+											# here; the IRQ switches to _intr_stack so the ISR
+											# never lands on this frame. 128K to the app-load
+											# region at 0x540000 — ample for the soft-float chains.
 		.set	_intr_stack,  0x005FF500	# STF interrupt stack
 		.set	_trap_stack,  0x005FF800	# STF fault/supervisor stack
 
