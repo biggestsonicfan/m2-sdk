@@ -243,6 +243,15 @@ static void m2__build_colorxlat(void) {
     }
 }
 
+/* STF start_again_ip @0x488: LUMA2 ramp at 0x12800000 — LUMA2[i] = (i+1)>>1 for 128
+ * shorts (0,1,1,2,2,...,64). The polygon pipeline reads this luminance ramp; left
+ * uninitialised it's garbage. */
+static void m2__build_luma2(void) {
+    volatile u16 *luma2 = (volatile u16 *)0x12800000u;
+    u32 i;
+    for (i = 0; i < 128u; i++) luma2[i] = (u16)((i + 1u) >> 1);
+}
+
 /* Copy the 8x8 font into char RAM, one copy per palette bank (tile gfx is indexed by
  * (palbank<<7)|char, so each colour group needs its own copy at char-block palbank*128).
  * Call again after any CG/scroll load that overwrites the 0..0x3FF font tile range. */
@@ -261,6 +270,7 @@ static void m2_init(void) {
     int i;
 
     m2__build_colorxlat();
+    m2__build_luma2();        /* STF start_again_ip: LUMA2 (0x12800000) ramp */
     m2_setpal(0, 0);          /* default backdrop = black (games may override) */
 
     M2_RENDERMODE = 0x4004;     /* STF start_again_ip writes 0x4004 to 0x10000000 (was 0x04) */
