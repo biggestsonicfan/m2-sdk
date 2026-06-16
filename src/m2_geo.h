@@ -234,9 +234,13 @@ static void geo_obj_line(const float a[3], const float b[3], float w, u32 cb) {
    per its own angle (luma = |normal.light|*diffuse + ambient): panels facing the
    light come out bright, those facing away dim to ambient -> the tube is shaded.
    Model 456's verts are y=0, so col1 affects only the normal, not the quad shape. */
-static void geo_obj_quad(const float v0[3], const float v1[3],
-                         const float v2[3], const float v3[3], u32 cb) {
-    float m[12], nx, ny, nz, nn;
+/* Compute the per-quad transform matrix (the float-heavy part). Split out so STATIC
+ * quads can compute it ONCE and cache it, keeping all soft-float out of the per-frame
+ * draw loop — a vblank IRQ firing inside this deep soft-float chain crashes m2emu
+ * (register-cache spill + interrupt). Compute it with interrupts masked to be safe. */
+static void geo_quad_matrix(const float v0[3], const float v1[3],
+                            const float v2[3], const float v3[3], float m[12]) {
+    float nx, ny, nz, nn;
     m[0] = ((v1[0]-v0[0]) + (v2[0]-v3[0])) / 24.0f;   /* col0: u edge */
     m[1] = ((v1[1]-v0[1]) + (v2[1]-v3[1])) / 24.0f;
     m[2] = ((v1[2]-v0[2]) + (v2[2]-v3[2])) / 24.0f;
@@ -253,8 +257,22 @@ static void geo_obj_quad(const float v0[3], const float v1[3],
     nn = geo__sqrt(nx*nx + ny*ny + nz*nz);
     if (nn < 1e-9f) nn = 1.0f;
     m[3] = nx/nn; m[4] = ny/nn; m[5] = nz/nn;
+}
+
+/* Emit a quad object from a precomputed matrix — NO float math (geo__f is a bitcast),
+ * so this is safe to call every frame with interrupts armed. */
+static void geo_quad_emit(const float m[12], u32 cb) {
     geo_matrix(m);
     geo_object(0u, GEO_TEXRAM_BIT | (cb * 4u), g_flatquad, 0x200u);
+}
+
+/* Combined compute+emit (for dynamic quads). Static quads should precompute the matrix
+ * once via geo_quad_matrix and reuse geo_quad_emit. */
+static void geo_obj_quad(const float v0[3], const float v1[3],
+                         const float v2[3], const float v3[3], u32 cb) {
+    float m[12];
+    geo_quad_matrix(v0, v1, v2, v3, m);
+    geo_quad_emit(m, cb);
 }
 
 static void geo_end(void) { geo__w(GEO_OP_END); }

@@ -113,6 +113,17 @@ void handleSerialIRQ(void) { }
 void kickGEO(void) { }
 void waitVBL(void) { }
 
+/* Mask / unmask maskable interrupts via the i960 process priority (modpc: 0x1F=31
+ * masks vblank etc.; 0 accepts them). Wrap a brief soft-float critical section in
+ * m2_irq_off()/m2_irq_on() so a vblank IRQ can't fire inside a deep soft-float call
+ * chain (which crashes m2emu via the register-cache spill). Supervisor-mode only. */
+static void m2_irq_off(void) {
+    __asm__ volatile ("shlo 0x10,0x1f,r4\n\tmov r4,r5\n\tmodpc r4,r4,r5" ::: "r4","r5");
+}
+static void m2_irq_on(void) {
+    __asm__ volatile ("shlo 0x10,0x1f,r4\n\tmov 0,r5\n\tmodpc r4,r4,r5" ::: "r4","r5");
+}
+
 /* ---- RNG: Sonic the Fighters' hardware-timer PRNG (m2_rand / m2_srand) ----- */
 #include "m2_rand.h"
 
