@@ -350,6 +350,77 @@ static void geo_flush_flip(void) {
     *(volatile u32 *)GEO_WRITE_REG = geo_buf_off[g_geo_buf];
 }
 
+/* ==== STF buffer-bank model + geometry_stuff (faithful port) ================
+ * STF's GEO region init runs through a command FIFO and is bracketed by its real
+ * buffer-bank + vsync-IRQ machinery. Requires the armed vblank IRQ (RAMBASE_START
+ * increments each vsync). Software globals live at their exact STF work-RAM
+ * addresses (linker symbols). */
+extern volatile u8  polyBank;     /* 0x501000  STF byte_501000  */
+extern volatile u32 BUFF_ADD;     /* 0x501004  current DL buffer */
+extern volatile u8  buffIndex;    /* 0x50100C  STF byte_50100C   */
+
+static const u32 geo_buff_ram_adds[GEO_NBUF] = {
+    0x900000u, 0x908000u, 0x910000u, 0x918000u    /* STF BUFF_RAM_ADDS */
+};
+
+/* STF change_poly_bank @0x3534: cache the COP poly bank (low byte of 0x98000C). */
+static void change_poly_bank(void) {
+    polyBank = (u8)(*(volatile u32 *)0x0098000Cu);
+}
+
+/* STF interrupt_wait @0x1768: spin until RAMBASE_START >= 2 with bit0 clear (two
+ * vsync IRQs), clear it, then change_poly_bank. */
+static void geo_interrupt_wait(void) {
+    while ((RAMBASE_START < 2u) || (RAMBASE_START & 1u)) { }
+    RAMBASE_START = 0u;
+    change_poly_bank();
+}
+
+/* STF set_end_mark @0x354C: write the END mark (0xF0F -> g10+0xF0), record the
+ * current buffer (g10+0x3008), advance the 0..3 buffer index, point the GEO at the
+ * next buffer (g10+0x1008). (BUFF_MAX usage tracking omitted - pure diagnostic.) */
+static void geo_set_end_mark(void) {
+    u32 prev = BUFF_ADD;
+    *(volatile u32 *)0x008000F0u = 0x00000F0Fu;
+    *(volatile u32 *)0x00803008u = prev;
+    buffIndex = (u8)((buffIndex + 1u) & 3u);
+    BUFF_ADD  = geo_buff_ram_adds[buffIndex];
+    *(volatile u32 *)0x00801008u = BUFF_ADD;
+}
+
+/* STF sub_11FE4 @0x11FE4: fill one GEO region through the command FIFO at 0x804000
+ * ((g10)[g12], g10=0x800000 g12=0x4000), then end-mark + interrupt_wait. The 4-short
+ * pattern is pushed 1024x (count 0x1000). */
+static void geo_region_fill(const u16 pat[4], u32 region) {
+    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    int i;
+    *(volatile u32 *)0x00800040u = 0x404u;        /* g10+0x40   */
+    *fifo = region;                                /* region addr */
+    *fifo = 0x1000u;                               /* count       */
+    for (i = 0; i < 1024; i++) {
+        *fifo = pat[0]; *fifo = pat[1]; *fifo = pat[2]; *fifo = pat[3];
+    }
+    *(volatile u32 *)0x00800100u = 0x1010u;        /* g10+0x100 = 0x1010 (lda 0x1010) */
+    *fifo = pat[0];                                /* final short */
+    geo_set_end_mark();
+    geo_interrupt_wait();
+}
+
+/* STF geometry_stuff @0x11F7C: seed the 5 GEO regions with their default-state
+ * patterns ({0x4000,0,0x1A00,X}). Call once after geo_initialize. */
+static void geometry_stuff(void) {
+    static const u16 p0[4] = {0x4000u, 0x0000u, 0x1A00u, 0x0400u};  /* 0x800000 */
+    static const u16 p1[4] = {0x4000u, 0x0000u, 0x1A00u, 0x2940u};  /* 0x801000 */
+    static const u16 p2[4] = {0x4000u, 0x0000u, 0x1A00u, 0x3E00u};  /* 0x802000 */
+    static const u16 p3[4] = {0x4000u, 0x0000u, 0x1A00u, 0x26C0u};  /* 0x803000 */
+    static const u16 p4[4] = {0x4000u, 0x0000u, 0x1A00u, 0xB140u};  /* 0x804000 */
+    geo_region_fill(p0, 0x800000u);
+    geo_region_fill(p1, 0x801000u);
+    geo_region_fill(p2, 0x802000u);
+    geo_region_fill(p3, 0x803000u);
+    geo_region_fill(p4, 0x804000u);
+}
+
 /* Flush an empty list so the GEO renders nothing (clears the 3D plane, e.g. when
    a 3D game returns to the 2D launcher menu). */
 static void geo_clear(void) { geo_begin(); geo_end(); geo_flush(0x10000u); }
