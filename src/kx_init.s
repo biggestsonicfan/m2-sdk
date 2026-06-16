@@ -323,7 +323,10 @@ start_again_ip:
 		ldconst	64, g0						# bump up stack to make
 		addo	sp, g0, sp					# room for simulated
 											# interrupt frame
-#		call	fix_stack					# routine to turn off int state
+		call	fix_stack					# exit the post-IAC interrupted state via a
+											# simulated interrupt-return, so the armed vblank
+											# IRQ is later taken from a clean user frame (STF
+											# parity; required once interrupts are unmasked)
 
 		lda		_nindy_stack,fp				# set up user stack space
 		lda		-0x40(fp), pfp				# load pfp (just in case)
