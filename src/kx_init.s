@@ -373,7 +373,11 @@ call_main:
 		modpc	r4, r4, r5					# PC priority -> 0 (enable interrupts)
 
 		mov		0, g14						# compiler expects g14 = 0
-		call	 _main						# this would normally be "callx _main" for a standalone program
+		b		_main						# STF does `b main`: run main in the established
+											# start_again_ip/fix_stack frame, NOT a fresh call
+											# frame. The call frame's RIP slot was exactly where
+											# the interrupt corruption landed (_nindy_stack+0x48)
+											# on m2emu. main never returns, so no call is needed.
 
 end_code_loop2:
 		bl		end_code_loop2
