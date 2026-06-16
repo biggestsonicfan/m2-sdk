@@ -102,7 +102,13 @@ static void m2_uart_hex(u32 v) {           /* "XXXXXXXX" big-endian nibbles */
 #include "m2font.h"            /* const u8 gFont[128*32] */
 
 /* ---- linker stubs (referenced by the boot .s; defined once here) ---------- */
-volatile u32 frameVBL = 0;     /* incremented by the (unused) vblank ISR */
+volatile u32 frameVBL = 0;     /* incremented by the vblank ISR (_irq_vblank) */
+/* STF software globals at their exact STF work-RAM addresses (defined in the
+ * linker script). RAMBASE_START=0x500000: VsyncScr increments it each vsync and
+ * interrupt_wait spins on it (waits for >=2 with bit0 clear, then clears).
+ * u32 (STF used a byte) so the ISR ld/st's it like frameVBL; logic is identical. */
+extern volatile u32 RAMBASE_START;   /* 0x00500000 */
+extern volatile u32 timerFlag;       /* 0x0050008C (STF byte_50008C)  */
 void handleSerialIRQ(void) { }
 void kickGEO(void) { }
 void waitVBL(void) { }
@@ -111,13 +117,13 @@ void waitVBL(void) { }
 #include "m2_rand.h"
 
 /* ---- frame pacing --------------------------------------------------------- */
-/* Wait one 60 Hz vblank. Re-asserts the vblank enable each call (written twice
- * so gcc960 -O2 doesn't store g14=0), then polls + ACKs the pending bit. */
+/* Wait one 60 Hz vblank. IRQ-driven now (STF model): the vblank ISR (_irq_vblank,
+ * vector 12) ticks frameVBL each vsync and ACKs the pending bit, so we just wait
+ * for the counter to advance. (The old poll+ACK of 0xE80000 here would race the
+ * ISR, which now owns the ACK.) */
 static void m2_vsync(void) {
-    M2_IRQ_ENA = M2_IRQ_VBL;
-    M2_IRQ_ENA = M2_IRQ_VBL;
-    while (!(M2_IRQ_REQ & M2_IRQ_VBL)) { }
-    M2_IRQ_REQ = ~M2_IRQ_VBL;
+    u32 start = frameVBL;
+    while (frameVBL == start) { }
     /* armed by a launcher: P1 Start returns control to it (stop the app) */
     {
         volatile u32 *ex = (volatile u32 *)M2_EXIT_CTL;

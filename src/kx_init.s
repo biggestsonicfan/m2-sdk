@@ -354,19 +354,20 @@ call_main:
 		st      r5,(r4)						# write 0x0 to e80000 (irq request)
 
 #		lda		0x0401,r5					# enable vblank & serial interrupts
-		lda		0x0001,r5					# enable vblank
-		st      r5,0x4(r4)					# write 0x1 to e80004 (irq enable)
+		lda		0x0021,r5					# enable board IRQ bits 0 (vblank) + 5 (STF)
+		st      r5,0x4(r4)					# write 0x21 to e80004 (irq enable)
 
 		lda     0xff1f917f,r4
 		lda     0x3f001000,r5				# 0x3f001000 (00 1 1 1 1 1 1 xxx 0 0 0 0 0 0 xx 1 xxx 0 x 0000 000)
 		modac   r4,r5,r5
 
-#		lda		0x3b001000,g0
-#		modac	g0,g0,g0
-
-#		ldconst	0x3f001000, g0
-#		ldconst	0x00009107, g1
-#		modac	g1, g0, g0
+# --  Unmask interrupts: clear the process-priority field (bits 16-20) to 0 so the
+# --  i960 accepts the vblank (vector 12, priority 1) interrupt. STF does this same
+# --  modpc in start_again_ip before entering main; we previously left priority high
+# --  (the vblank ISR never fired, so m2_vsync polled instead).
+		shlo	0x10, 0x1f, r4				# r4 = 0x1f0000 (priority field mask)
+		mov		0, r5						# r5 = 0 (new priority = 0)
+		modpc	r4, r4, r5					# PC priority -> 0 (enable interrupts)
 
 		mov		0, g14						# compiler expects g14 = 0
 		call	 _main						# this would normally be "callx _main" for a standalone program

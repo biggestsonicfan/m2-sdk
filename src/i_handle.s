@@ -50,13 +50,13 @@ _irq_vblank:
 	addi    1,g0,g0
 	st		g0,_frameVBL			# increase frame counter
 
-#	ld		0x01000000,g0			# increase TILE at top left
-#	addi    1,g0,g0
-#	st		g0,0x01000000
+	ld		_RAMBASE_START,g0
+	addi    1,g0,g0
+	st		g0,_RAMBASE_START		# RAMBASE_START++ (STF VsyncScr; interrupt_wait spins on it)
 
 	lda     0x00e80000,g0
-	lda     0x0001,g1
-	st      g1,(g0)					# clear irq
+	subo    2,0,g1					# g1 = 0xFFFFFFFE (clear vblank bit0; STF VsyncScr + m2_vsync)
+	st      g1,(g0)					# ack vblank irq
 
 	subo    16,sp,sp
 	ldq     (sp),g12
@@ -68,6 +68,55 @@ _irq_vblank:
 	ldq     (sp),g0					# pop from stack
 
 	ret
+
+# ---- STF interrupt-table ISRs (vectors 13/14/15 + 8-11/16+) -----------------
+# Faithful to STF's _intr_table. VsyncObj/Timer/Other are dormant unless their
+# board IRQ source is enabled; they save the g-regs they touch and ACK so an
+# unexpected fire can't corrupt the foreground or storm. Internals that depend on
+# STF game state (g0-based Timer math, send_sound_code) are omitted - those
+# subsystems don't exist in geotest.
+
+	.globl	_vsync_obj
+	.globl	_timer_irq
+	.globl	_other_irq
+	.globl	_intr_halt
+
+# VsyncObj (STF vector 13 @0xD10): just ACK (clear bit2).
+_vsync_obj:
+	lda     0x00e80000,r4
+	subo    5,0,r5					# r5 = 0xFFFFFFFB
+	st      r5,(r4)					# ack (STF VsyncObj)
+	ret
+
+# Timer (STF vector 14 @0xBEC): reset hardware timer TIMER_04 (0xF0000C) to max,
+# flag timerFlag. STF's g0-scaled deadline math is frame-specific (g0 undefined in
+# our context) so it is omitted; structure preserved.
+_timer_irq:
+	stq     g0,(sp)
+	addo    16,sp,sp
+	mov     0,g14
+	lda     0x000fffff,g0
+	lda     0x00f0000c,g1
+	st      g0,(g1)					# TIMER_04 = 0xFFFFF
+	lda     1,g0
+	st      g0,_timerFlag			# byte_50008C = 1
+	subo    16,sp,sp
+	ldq     (sp),g0
+	ret
+
+# Other (STF vector 15 @0xDF0): STF checks IRQ bit10 -> send_sound_code (absent
+# here). Just ACK defensively.
+_other_irq:
+	lda     0x00e80000,r4
+	subi    1,0,r5					# r5 = 0xFFFFFFFF
+	st      r5,(r4)					# ack
+	ret
+
+# IntrHalt (STF vectors 8-11, 16+ @0xE10): unexpected interrupt -> STF prints
+# "Interrupt Halt #" then halts. We just halt (spin) so an unexpected vector is
+# observable (frozen frame) rather than running off into garbage.
+_intr_halt:
+	b		_intr_halt
 
 _irq_serial:
 
