@@ -254,10 +254,7 @@ static void geo_obj_quad(const float v0[3], const float v1[3],
     if (nn < 1e-9f) nn = 1.0f;
     m[3] = nx/nn; m[4] = ny/nn; m[5] = nz/nn;
     geo_matrix(m);
-    /* FLAT-SHADE TEST: no GEO_TEXRAM_BIT — sample the colorbase color directly
-     * instead of texram (which we never uploaded via send_tex_default; that's the
-     * garbage that rendered as red). If solid colors appear, textures are the gap. */
-    geo_object(0u, (cb * 4u), g_flatquad, 0x200u);
+    geo_object(0u, GEO_TEXRAM_BIT | (cb * 4u), g_flatquad, 0x200u);
 }
 
 static void geo_end(void) { geo__w(GEO_OP_END); }
