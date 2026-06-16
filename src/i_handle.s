@@ -35,36 +35,37 @@ _user_NMI:
 
 
 _irq_vblank:
-	# NINDY interrupt-handler prologue: reserve a 64-byte scratch frame ABOVE sp
-	# FIRST, then save g0..g14 at negative offsets. The last is `stt` (TRIPLE:
-	# g12/g13/g14) — NEVER a `stq` (which would also save g15 = fp). Hand-rolling sp
-	# and saving fp (the old code) corrupts the i960 return frame and the interrupt
-	# return jumps into the stack (m2emu: invalid opcode at _nindy_stack+0x48).
-	ldconst 64, r4
-	addo    sp, r4, sp
-	stq     g0,  -64(sp)
-	stq     g4,  -48(sp)
-	stq     g8,  -32(sp)
-	stt     g12, -16(sp)			# g12,g13,g14 only (leave g15/fp alone)
+	# EXACT STF VsyncScr (0xC40) prologue/epilogue: save sp to r3, reserve a 64-byte
+	# scratch frame, save g0..g15 (full quads, INCLUDING g15) at the old sp, do the
+	# work, restore g0..g15, then RESTORE sp via `mov r3,sp` before ret. The sp restore
+	# is essential: leaving sp advanced makes m2emu's interrupt-return resolve the wrong
+	# frame and land on the ISR's own RIP slot (invalid opcode at _intr_stack+0x8).
+	mov     sp, r3
+	lda     64(sp), sp
+	stq     g0,  (r3)
+	stq     g4,  16(r3)
+	stq     g8,  32(r3)
+	stq     g12, 48(r3)
 
-	mov     0,g14
+	mov     0, g14
 
-	ld		_frameVBL,g0
-	addi    1,g0,g0
-	st		g0,_frameVBL			# frameVBL++
+	ld		_frameVBL, g0
+	addi    1, g0, g0
+	st		g0, _frameVBL			# frameVBL++
+	ld		_RAMBASE_START, g0
+	addi    1, g0, g0
+	st		g0, _RAMBASE_START		# RAMBASE_START++ (STF VsyncScr; interrupt_wait spins on it)
 
-	ld		_RAMBASE_START,g0
-	addi    1,g0,g0
-	st		g0,_RAMBASE_START		# RAMBASE_START++ (STF VsyncScr; interrupt_wait spins on it)
+	lda     -64(sp), r3
+	ldq     48(r3), g12
+	ldq     32(r3), g8
+	ldq     16(r3), g4
+	ldq     (r3),   g0
+	mov     r3, sp					# restore sp (STF VsyncScr — REQUIRED for the int return)
 
-	lda     0x00e80000,g0
-	subo    2,0,g1					# g1 = 0xFFFFFFFE (clear vblank bit0; STF VsyncScr + m2_vsync)
-	st      g1,(g0)					# ack vblank irq
-
-	ldq     -64(sp), g0
-	ldq     -48(sp), g4
-	ldq     -32(sp), g8
-	ldt     -16(sp), g12			# matching triple restore
+	lda     0x00e80000, r4			# ack vblank irq (STF: after restore, via r4/r5)
+	subo    2, 0, r5				# r5 = 0xFFFFFFFE (clear vblank bit0)
+	st      r5, (r4)
 	ret
 
 # ---- STF interrupt-table ISRs (vectors 13/14/15 + 8-11/16+) -----------------
