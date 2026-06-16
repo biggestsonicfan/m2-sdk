@@ -313,12 +313,12 @@ static void geo_func(void) {
     }
 }
 
-/* STF init_0 @0x1FC — phase 1, BEFORE the reinit-IAC and BEFORE the COP/GEO boot:
- * ZERO the whole 4-buffer region (0x8000 words = 0x20000 bytes), then write the END
- * opcode to each of the 4 buffer heads. Must run EARLY — before anything touches the
- * GEO — so it never parses uninitialised BUFF_RAM as bogus polygons (the striping).
- * Call near the top of main, before the COP boot. (STF's geo_initialize @0x169C does
- * NOT clear BUFF_RAM — that belongs here.) */
+/* Zero the whole 4-buffer region (0x8000 words = 0x20000 bytes), then write the END
+ * opcode to each of the 4 buffer heads (STF init_0 @0x1FC). Kills the GEO striping
+ * (uninitialised BUFF_RAM parsed as bogus polygons). Called from geo_initialize after
+ * the GEO_CTL clear: it can't run before the COP boot (iop-1st poison) nor before
+ * m2_init / geo_func / GEO_CTL clear (m2emu won't map BUFF_RAM yet → black screen), so
+ * this late spot is the only one that boots on hardware + MAME + m2emu. */
 static void geo_buffram_clear(void) {
     volatile u32 *buf = (volatile u32 *)GEO_BUFFERRAM;
     u32 i, b;
@@ -331,10 +331,8 @@ static void geo_buffram_clear(void) {
  * the four buffers empty, point the GEO at buffer 0, set ZCLIP. Call after the GEO is
  * booted and after geo_buffram_clear(), before the first frame. */
 static void geo_initialize(void) {
-    u32 b;
     *(volatile u32 *)GEO_CTL_REG = 0u;                    /* clear GEO ctl (0x98000c) */
-    for (b = 0; b < GEO_NBUF; b++)                        /* each buffer = empty list */
-        *(volatile u32 *)(GEO_BUFFERRAM + geo_buf_off[b]) = GEO_OP_END;
+    geo_buffram_clear();                                  /* zero BUFF_RAM + END heads */
     g_geo_buf = 0u;
     *(volatile u32 *)GEO_WRITE_REG = geo_buf_off[1];      /* next write target        */
     *(volatile u32 *)GEO_READ_REG  = geo_buf_off[0];      /* GEO reads buffer 0       */
