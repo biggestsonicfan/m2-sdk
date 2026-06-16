@@ -325,12 +325,12 @@ start_again_ip:
 											# interrupt frame
 		call	fix_stack					# exit the post-IAC interrupted state via a
 											# simulated interrupt-return, so the armed vblank
-											# IRQ is later taken from a clean user frame (STF
-											# parity; required once interrupts are unmasked)
+											# IRQ is later taken from a clean frame (STF parity)
 
-		lda		_nindy_stack,fp				# set up user stack space
-		lda		-0x40(fp), pfp				# load pfp (just in case)
-		lda		0x40(fp), sp				# set up current stack ptr
+		# NO _nindy_stack override: STF never resets fp/sp here — main runs on the
+		# supervisor stack the IAC/PRCB/sys_proc_table set up. Overriding it with a
+		# NINDY-monitor user stack (in supervisor mode) is the mismatch the m2emu
+		# interrupt path corrupted (crash always landed at _nindy_stack+0x8).
 
 		mov		0, g14						# g14 used by C compiler
 											# for argument lists of
