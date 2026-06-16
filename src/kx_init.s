@@ -764,7 +764,12 @@ reinitialize_iac:
 # (_nindy_stack=0x502000, _intr_stack=0x504000 jammed together) let the vblank ISR
 # smash the user stack on m2emu (invalid opcode at 0x502048). _intr/_trap match STF
 # exactly; the user stack sits in the free region just below them.
-		.set	_nindy_stack, 0x005F8000	# user/main stack (28K below the tables)
+		.set	_nindy_stack, 0x005F0000	# user/main stack: above heap end (0x5F0000),
+											# below M2_EXIT_CTL (0x5F8000) and the tables.
+											# NOT 0x5F8000 — that is M2_EXIT_CTL, which
+											# m2_vsync reads + calls through every frame; a
+											# stack there got read as a function pointer ->
+											# wild call (invalid opcode at 0x548008).
 		.set	_intr_stack,  0x005FF500	# STF interrupt stack
 		.set	_trap_stack,  0x005FF800	# STF fault/supervisor stack
 
