@@ -122,15 +122,15 @@ static void geo_object_from_table(u32 n) {
 #define GEO_OP_TEXDATA  0x02000404u
 #define GEO_TEXRAM_BIT  0x00800000u
 
-static float geo__sqrt(float x) {           /* DSP COP_SQRT if available, else Newton's */
-#ifdef COP_SQRT
-    return m2_cop_sqrt(x);
-#else
+/* Pure-C Newton sqrt. NOTE: do NOT route this through m2_cop_sqrt — COP_SQRT is
+ * always "defined" (it's the opcode macro, not a feature flag), and depending on
+ * the COP here hangs the render loop if the COP math FIFO doesn't answer. The COP
+ * is only an accelerator; under soft-float the C path is correct and safe. */
+static float geo__sqrt(float x) {
     float g; int i;
     if (x <= 0.0f) return 0.0f;
-    g = x; for (i = 0; i < 6; i++) g = 0.5f * (g + x / g);
+    g = x; for (i = 0; i < 8; i++) g = 0.5f * (g + x / g);
     return g;
-#endif
 }
 
 /* Write an untextured colour header into texture-header RAM slot cb (th3=cb<<6,
@@ -210,13 +210,13 @@ static void geo_obj_line(const float a[3], const float b[3], float w, u32 cb) {
     float mx = (a[0] + b[0]) * 0.5f, my = (a[1] + b[1]) * 0.5f, mz = (a[2] + b[2]) * 0.5f;
     /* width perp = dir x midpoint (screen-plane perpendicular to the line) */
     float px = dy * mz - dz * my, py = dz * mx - dx * mz, pz = dx * my - dy * mx;
-    float pn = m2_cop_sqrt(px * px + py * py + pz * pz);
+    float pn = geo__sqrt(px * px + py * py + pz * pz);
     float nx, ny, nz, nn, hw, m[12];
     if (pn < 1e-6f) { px = 1.0f; py = 0.0f; pz = 0.0f; pn = 1.0f; }  /* line on the view axis */
     hw = (w * 0.5f) / pn;
     px *= hw; py *= hw; pz *= hw;                       /* half-width vector */
     nx = dy * pz - dz * py; ny = dz * px - dx * pz; nz = dx * py - dy * px;  /* dir x perp */
-    nn = m2_cop_sqrt(nx * nx + ny * ny + nz * nz);
+    nn = geo__sqrt(nx * nx + ny * ny + nz * nz);
     if (nn < 1e-6f) nn = 1.0f;
     if (nx * mx + ny * my + nz * mz > 0.0f) nn = -nn;  /* orient the normal toward the camera */
     m[0] = dx / 12.0f; m[1] = dy / 12.0f; m[2] = dz / 12.0f;   /* col0: model +x -> half-line  */
@@ -249,7 +249,7 @@ static void geo_obj_quad(const float v0[3], const float v1[3],
     ny = m[2]*m[6] - m[0]*m[8];
     nz = m[0]*m[7] - m[1]*m[6];
     if (nx*m[9] + ny*m[10] + nz*m[11] > 0.0f) { nx = -nx; ny = -ny; nz = -nz; }  /* inward (we see the rear/inner wall) */
-    nn = m2_cop_sqrt(nx*nx + ny*ny + nz*nz);
+    nn = geo__sqrt(nx*nx + ny*ny + nz*nz);
     if (nn < 1e-9f) nn = 1.0f;
     m[3] = nx/nn; m[4] = ny/nn; m[5] = nz/nn;
     geo_matrix(m);
