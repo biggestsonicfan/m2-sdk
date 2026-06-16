@@ -313,17 +313,26 @@ static void geo_func(void) {
     }
 }
 
-/* One-time GEO display-list setup (STF geo_initialize): clear GEO ctl, prime the
- * four buffers empty, point the GEO at buffer 0, set ZCLIP. Call after the GEO is
- * booted, before the first frame. */
-static void geo_initialize(void) {
+/* STF init_0 @0x1FC — phase 1, BEFORE the reinit-IAC and BEFORE the COP/GEO boot:
+ * ZERO the whole 4-buffer region (0x8000 words = 0x20000 bytes), then write the END
+ * opcode to each of the 4 buffer heads. Must run EARLY — before anything touches the
+ * GEO — so it never parses uninitialised BUFF_RAM as bogus polygons (the striping).
+ * Call near the top of main, before the COP boot. (STF's geo_initialize @0x169C does
+ * NOT clear BUFF_RAM — that belongs here.) */
+static void geo_buffram_clear(void) {
     volatile u32 *buf = (volatile u32 *)GEO_BUFFERRAM;
-    u32 b, i;
-    *(volatile u32 *)GEO_CTL_REG = 0u;                    /* clear GEO ctl (0x98000c) */
-    /* STF init_0 @0x1FC: ZERO the entire 4-buffer region (0x8000 words = 0x20000
-     * bytes) before priming it. Without this the GEO parses uninitialised BUFF_RAM
-     * as bogus polygons — the persistent screen striping. */
+    u32 i, b;
     for (i = 0; i < 0x8000u; i++) buf[i] = 0u;
+    for (b = 0; b < GEO_NBUF; b++)
+        *(volatile u32 *)(GEO_BUFFERRAM + geo_buf_off[b]) = GEO_OP_END;
+}
+
+/* One-time GEO display-list setup (STF geo_initialize @0x169C): clear GEO ctl, prime
+ * the four buffers empty, point the GEO at buffer 0, set ZCLIP. Call after the GEO is
+ * booted and after geo_buffram_clear(), before the first frame. */
+static void geo_initialize(void) {
+    u32 b;
+    *(volatile u32 *)GEO_CTL_REG = 0u;                    /* clear GEO ctl (0x98000c) */
     for (b = 0; b < GEO_NBUF; b++)                        /* each buffer = empty list */
         *(volatile u32 *)(GEO_BUFFERRAM + geo_buf_off[b]) = GEO_OP_END;
     g_geo_buf = 0u;
