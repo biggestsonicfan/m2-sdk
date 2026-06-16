@@ -29,6 +29,7 @@
 #include "m2_3d.h"   /* COP/DSP float helpers used by the object_data primitives */
 
 #define GEO_BUFFERRAM   0x00900000u   /* m_bufferram, i960-mapped               */
+#define GEO_START       0x00800000u   /* g10 in STF — GEO command region        */
 #define GEO_READ_REG    0x00803008u   /* write -> geo_read_start                */
 
 /* Opcode words (cmd in bits[28:23]) — STF's encodings, verified vs geo_parse. */
@@ -282,6 +283,32 @@ static void geo_flush(u32 read_start) {
 #define GEO_NBUF        4u
 static const u32 geo_buf_off[GEO_NBUF] = { 0x00000u, 0x08000u, 0x10000u, 0x18000u };
 static u32 g_geo_buf;                  /* current build buffer (0..3)             */
+
+/* GEO_RELATED config table — STF geo_func @0x1550 uploads these 64 halfwords into
+ * the GEO command region (GEO_START + i*0x10) BEFORE geo_initialize. Four 16-entry
+ * blocks (one per display-list buffer); block 0 is the rich header, 1..3 are the
+ * sparse per-buffer headers. */
+static const u16 geo_related[64] = {
+    0x0000,0x0004,0x8808,0x0006,0x0101,0x0101,0x0201,0x0001,0x0001,0x0002,0x0003,0x000C,0x0003,0x0003,0x0320,0x0000,
+    0x0001,0x0004,0x8808,0x0000,0x0101,0x0000,0x0001,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,
+    0x0001,0x0004,0x8808,0x0000,0x0101,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,
+    0x0000,0x0004,0x8808,0x0000,0x0101,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000
+};
+
+/* STF geo_func @0x1550: prime the GEO command region with the GEO_RELATED table.
+ * For each of 64 entries: halfword H -> GEO_START+i*0x10+4, (H>>8) -> +8 (the
+ * System-24 GEO entry split). STF runs this BEFORE geo_initialize; without these
+ * per-buffer command headers the GEO has no valid list framing and faults when it
+ * parses ours. Call after the GEO is booted, before geo_initialize. */
+static void geo_func(void) {
+    volatile u32 *geo = (volatile u32 *)GEO_START;
+    int i;
+    for (i = 0; i < 64; i++) {
+        u32 h = geo_related[i];
+        geo[i * 4u + 1u] = h;          /* slot+4 = halfword     */
+        geo[i * 4u + 2u] = h >> 8;     /* slot+8 = high byte     */
+    }
+}
 
 /* One-time GEO display-list setup (STF geo_initialize): clear GEO ctl, prime the
  * four buffers empty, point the GEO at buffer 0, set ZCLIP. Call after the GEO is
