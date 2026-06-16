@@ -223,12 +223,23 @@ static void m2_sound_init(void) {
 
 /* ---- board init ----------------------------------------------------------- */
 static void m2__build_colorxlat(void) {
-    int c;
-    for (c = 0; c < 32; c++) {
-        u16 v = (u16)((c << 3) | (c >> 2));   /* identity pal5bit expansion */
-        *(volatile u16 *)(0x01810080u + (u32)c * 0x200u) = v;  /* R */
-        *(volatile u16 *)(0x01814080u + (u32)c * 0x200u) = v;  /* G */
-        *(volatile u16 *)(0x01818080u + (u32)c * 0x200u) = v;  /* B */
+    /* STF start_again_ip @0x2E8: build the FULL color-translation table — 32 intensity
+     * rows x 128 pens, row stride 0x200 bytes (0x100 shorts), R/G/B planes at
+     * 0x1810000/0x1814000/0x1818000. colorxlat[i][p] = clamp((MUL*(i*p))>>8 + ADD, 0xFF)
+     * with default test values MUL=0x100 (identity), ADD=0 -> clamp(i*p, 0xFF). The GEO
+     * samples this for every polygon pixel; the old sparse table (1 pen/row) left garbage
+     * entries that render as screen noise on silicon (MAME zero-inits it, hid the bug). */
+    volatile u16 *R = (volatile u16 *)0x01810000u;
+    volatile u16 *G = (volatile u16 *)0x01814000u;
+    volatile u16 *B = (volatile u16 *)0x01818000u;
+    u32 inten, pen;
+    for (inten = 0; inten < 32u; inten++) {
+        u32 row = inten * 0x100u;                 /* 0x200 bytes = 0x100 shorts */
+        for (pen = 0; pen < 128u; pen++) {
+            u32 v = inten * pen;                   /* integer mul (no FP) */
+            if (v > 0xFFu) v = 0xFFu;
+            R[row + pen] = (u16)v; G[row + pen] = (u16)v; B[row + pen] = (u16)v;
+        }
     }
 }
 
