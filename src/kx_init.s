@@ -755,9 +755,14 @@ reinitialize_iac:
 #	into it).  If application code will us out of supervisor mode, 
 #	care must be taken to increase the size of the _trap_stack.
 #
-		.bss	_nindy_stack, 0x2000, 6		# NINDY's stack 
-		.bss	_intr_stack,  0x0200, 6		# interrupt stack
-		.bss	_trap_stack,  0x0100, 6		# fault (supervisor) stack
+# All i960 stacks live HIGH, by the tables (0x5FF000) and RAM PRCB (0x5FF400),
+# isolated from the heap (ends 0x5F0000) and .bss. The old cramped low .bss stacks
+# (_nindy_stack=0x502000, _intr_stack=0x504000 jammed together) let the vblank ISR
+# smash the user stack on m2emu (invalid opcode at 0x502048). _intr/_trap match STF
+# exactly; the user stack sits in the free region just below them.
+		.set	_nindy_stack, 0x005F8000	# user/main stack (28K below the tables)
+		.set	_intr_stack,  0x005FF500	# STF interrupt stack
+		.set	_trap_stack,  0x005FF800	# STF fault/supervisor stack
 
 
 
