@@ -315,32 +315,14 @@ fix_stack:
 start_again_ip:
 #/*		call	_disable_ints				# disable board interrupts */
 #
-#	Before call to main, we need to take the processor out
-#	of the "interrupted" state.  In order to do this, we will
-# 	execute a call statement, then "fix up" the stack frame
-#	to cause an interrupt return to be executed.
-#
-		ldconst	64, g0						# bump up stack to make
-		addo	sp, g0, sp					# room for simulated
-											# interrupt frame
-		call	fix_stack					# exit the post-IAC interrupted state via a
-											# simulated interrupt-return, so the armed vblank
-											# IRQ is later taken from a clean frame (STF parity)
+# FAITHFUL TO STF start_again_ip: NO fix_stack, NO _nindy_stack override. STF (a game
+# running directly, not the NINDY monitor) does not exit the interrupted state via a
+# simulated interrupt-return, and does not switch to a separate user stack — main runs on
+# the IAC/supervisor stack the REINITIALIZE-IAC established, entered via `b main`. The tail
+# below (synmov / clear / enable 0x21 / modpc / modac / b main) mirrors STF's
+# _interrupt_register_write (ROM 0x554-0x5A4) exactly.
 
-		# crtm2 step: switch to the application's OWN stack before entering main
-		# (NINDY manual 5-14/5-16 + crtnin.s). The app MUST NOT run on the interrupt
-		# stack — when the vblank IRQ fires the i960 switches to _intr_stack, so a main
-		# running there gets its frame clobbered by the ISR (that was the _intr_stack+8
-		# crash). _nindy_stack lives in the free low region, well clear of _intr_stack
-		# (0x5FF500) and M2_EXIT_CTL (0x5F8000).
-		lda		_nindy_stack, fp			# application stack base
-		lda		-0x40(fp), pfp				# pfp (just in case; the app never returns)
-		lda		0x40(fp), sp				# current stack ptr
-
-		mov		0, g14						# g14 used by C compiler
-											# for argument lists of
-											# more than 12 arguments.
-											# Initialize to 0.
+		mov		0, g14						# g14 used by C compiler (arg lists). Init to 0.
 
 
 # -- 	initialize floating point registers, if any
@@ -365,22 +347,18 @@ call_main:
 		lda		0x0021,r5					# enable board IRQ bits 0 (vblank) + 5 (STF)
 		st      r5,0x4(r4)					# write 0x21 to e80004 (irq enable)
 
-		lda     0xff1f917f,r4
-		lda     0x3f001000,r5				# 0x3f001000 (00 1 1 1 1 1 1 xxx 0 0 0 0 0 0 xx 1 xxx 0 x 0000 000)
-		modac   r4,r5,r5
-
-# --  Unmask interrupts: clear the process-priority field (bits 16-20) to 0 so the
-# --  i960 accepts the vblank (vector 12, priority 1) interrupt. STF does this same
-# --  modpc in start_again_ip before entering main; we previously left priority high
-# --  (the vblank ISR never fired, so m2_vsync polled instead).
+# --  STF order: modpc (unmask) FIRST, then modac. Clear the process-priority field
+# --  (bits 16-20) to 0 so the i960 accepts the vblank (vector 12, priority 1) interrupt.
 		shlo	0x10, 0x1f, r4				# r4 = 0x1f0000 (priority field mask)
 		mov		0, r5						# r5 = 0 (new priority = 0)
 		modpc	r4, r4, r5					# PC priority -> 0 (enable interrupts)
 
-		mov		0, g14						# compiler expects g14 = 0
-		callx	_main						# crtm2: enter the app via a real call frame on its
-											# own stack (NINDY crtnin.s does `callx _main`); main
-											# never returns.
+		lda     0xff1f917f,r4
+		lda     0x3f001000,r5				# 0x3f001000 arithmetic-controls default
+		modac   r4,r5,r5
+
+		b		_main						# STF: `b main` — run main on the IAC/supervisor stack
+											# in the start_again_ip frame; main never returns.
 
 end_code_loop2:
 		bl		end_code_loop2
