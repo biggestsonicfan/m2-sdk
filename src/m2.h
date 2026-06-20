@@ -206,13 +206,20 @@ M2_API void m2_print(int col, int row, const char *s, int palbank) {
     for (i = 0; s[i]; i++)
         M2_TILE_FG[row * M2_W + col + i] = m2_tile(palbank, (u8)s[i]);
 }
-/* Set a colour group's INK colour (font pixel value 1 -> pen palbank*16+1).
- * The gFont glyphs are TWO-LAYER: value 1 = ink (this), value 2 = an outline/shadow that
- * renders through pen palbank*16+2. That pen is NOT set here, so the outline shows as
- * whatever palram holds there — black where palram is 0 (the usual look). For a defined
- * outline colour (or a guaranteed-black outline on silicon, where palram may be
- * uninitialised) also call m2_setpal(palbank*16+2, outline_colour). */
-M2_API void m2_textpal(int palbank, u16 colour) { m2_setpal(palbank * 16 + 1, colour); }
+/* Set a colour group's INK colour (font pixel value 1 -> pen palbank*16+1) and reset its
+ * OUTLINE to black. The gFont glyphs are TWO-LAYER: value 1 = ink, value 2 = an
+ * outline/shadow rendered through pen palbank*16+2. We set that pen to black (0) here so
+ * the outline is a reliable black on every target (palram may be uninitialised on silicon,
+ * where leaving it unset gave a garbage-coloured outline). To use a different outline
+ * colour, call m2_textedge(palbank, colour) AFTER this. */
+M2_API void m2_textpal(int palbank, u16 colour) {
+    m2_setpal(palbank * 16 + 1, colour);   /* ink     (font value 1)               */
+    m2_setpal(palbank * 16 + 2, 0);        /* outline (font value 2) = black default */
+}
+
+/* Override the font outline/shadow colour for a colour group (font value 2 -> pen
+ * palbank*16+2). Call AFTER m2_textpal, which resets the outline to black. */
+M2_API void m2_textedge(int palbank, u16 colour) { m2_setpal(palbank * 16 + 2, colour); }
 
 /* ---- input (315-5649) ----------------------------------------------------- */
 enum { M2_UP = 1, M2_DOWN = 2, M2_LEFT = 4, M2_RIGHT = 8,
