@@ -8,6 +8,11 @@
  * vector rendering with the same module (g2d_vquad/g2d_vline/g2d_zsort_fine), see
  * the Tempest game in the m2-snake project.
  *
+ * Also demonstrates TILE TEXT colour control: m2_textpal(palbank, ink) sets a colour
+ * group's ink and resets its outline to black; m2_textedge(palbank, colour) overrides
+ * the outline/shadow colour. Tile text composites above the g2d scene, with pen-0 gaps
+ * transparent (the scene shows through).
+ *
  * Build:  cmake -G Ninja -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake
  *         ninja -C build            (default M2_GAME=demo)
  */
@@ -27,6 +32,24 @@ int main(void) {
     g2d_color(1, M2_RGB(31, 6, 6));         /* slot 1 = red   (ball)                 */
     g2d_color(2, M2_RGB(4, 26, 28));        /* slot 2 = cyan  (frame)                */
     g2d_color(3, M2_RGB(31, 31, 4));        /* slot 3 = yellow(slider)               */
+
+    /* --- TEXT example: ink colour (m2_textpal) + outline colour (m2_textedge) ------
+     * Set once (palette + tilemap persist). Each colour GROUP (palbank) is independent:
+     * m2_textpal sets that group's ink and resets its outline to BLACK; call m2_textedge
+     * AFTER it to use a different outline colour. */
+    m2_textpal(1, M2_RGB(31, 31, 31));                       /* white ink, default black outline */
+    m2_print(2, 2, "m2_textpal: WHITE INK + BLACK OUTLINE", 1);
+
+    m2_textpal(2, M2_RGB(31, 27, 0));                        /* amber ink ...                    */
+    m2_textedge(2, M2_RGB(13, 2, 0));                        /* ... dark-red outline override    */
+    m2_print(2, 4, "m2_textedge: AMBER INK + DARK-RED EDGE", 2);
+
+    m2_textpal(3, M2_RGB(6, 31, 10));                        /* green ink ...                    */
+    m2_textedge(3, M2_RGB(0, 0, 31));                        /* ... blue outline override        */
+    m2_print(2, 6, "m2_textedge: GREEN INK + BLUE EDGE", 3);
+
+    m2_textpal(4, M2_RGB(31, 31, 31));                       /* white ink, default black outline */
+    m2_print(2, 8, "another group, default BLACK OUTLINE", 4);
 
     for (;;) {
         u32 in = m2_input(0);

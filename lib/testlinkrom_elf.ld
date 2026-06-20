@@ -31,7 +31,18 @@ SECTIONS
         _etext = .;
     } > rom
 
-    .data : AT (_etext)
+    /* STF software globals live at the bottom of work RAM at their exact STF
+     * addresses (the boot/IRQ asm in i_handle.s references them); reserve
+     * 0x500000-0x502000 so our .data/.bss don't overlap. kx_init zeroes this region. */
+    /* leading underscore: this build uses -fleading-underscore, and the boot/IRQ asm
+     * refers to these as _RAMBASE_START etc. (so do the C externs once mangled). */
+    _RAMBASE_START = 0x00500000;  /* vsync counter; interrupt_wait spins on it */
+    _timerFlag     = 0x0050008C;  /* STF byte_50008C (Timer ISR flag)          */
+    _polyBank      = 0x00501000;  /* STF byte_501000 (change_poly_bank cache)  */
+    _BUFF_ADD      = 0x00501004;  /* STF current display-list buffer address   */
+    _buffIndex     = 0x0050100C;  /* STF byte_50100C (0..3 buffer index)       */
+
+    .data 0x00502000 : AT (_etext)
     {
         _ram = .;
         *(.data)
