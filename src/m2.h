@@ -184,9 +184,15 @@ M2_API void m2_cleartiles(u16 entry) {
  * one the coloured text proves renders palram correctly everywhere) is used instead:
  * fill it with a SOLID tile (char 1 = pixel-1, palbank 0, pen 1 = colour) at NO
  * priority, so it sits below the 3D layer (polys draw on top) but above the backdrop.
- * Call right after m2_init; text drawn afterwards (PRIO bit) lands above it. */
+ * Call right after m2_init; text drawn afterwards (PRIO bit) lands above it.
+ *
+ * palette[0] (the hw backdrop) is ALSO set to `colour`: text drawn over this backdrop
+ * is transparent (its glyph gaps are pixel-value 0 = transparent and fall through to
+ * palette[0]), so matching palette[0] to the field makes that transparency read cleanly
+ * (gaps == field) on MAME/silicon instead of showing a black box behind every glyph. */
 M2_API void m2_backdrop(u16 colour) {
     int i;
+    m2_setpal(0, colour);                 /* hw backdrop = field, so text gaps match (transparent text) */
     m2_setpal(1, colour);                 /* palbank 0, pixel 1 = colour */
     m2_solidtile(1, 1);                   /* char 1 = solid pixel-1 (bank 0 gfx) */
     for (i = 0; i < (int)(M2_W * 64u); i++)
