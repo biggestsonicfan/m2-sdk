@@ -467,6 +467,42 @@ static void geometry_stuff(void) {
     geo_region_fill(p4, 0x804000u);
 }
 
+/* STF sub_290FC(0) + camera_init->sub_29148 (@0x29148): the per-material shading
+ * coefficient table, uploaded to GEO slot 0x60 (opcode 0x606). geotest never wrote
+ * slot 0x60 at all, so the shaded object path (MODE=1) read garbage coefficients.
+ * sub_290FC(0) copies flt_90A20[0:0x20] into material_num_floats; sub_29148 then pushes
+ * 0x20 records {material_num_floats[i]=flt_90A20[i], flt_90BA0[i]} through the FIFO
+ * (base 0, count 0x20). flt_90A20 = luma/state headers (0x03FFA040 family, same as the
+ * make_luma_ram ramp); flt_90BA0 = IEEE intensity ramp 1.0 -> ~0. Tables verbatim from
+ * STF program ROM @0x90A20 / @0x90BA0. Call once at boot after the config tables. */
+static const u32 geo_mat_hdr[0x20] = {  /* flt_90A20 */
+    0x03FFA040u,0x03FFA040u,0x03FFA040u,0x0390A050u,0x03FF8040u,0x03FFA040u,0x03FFA040u,0x07FF50FFu,
+    0x07FF1C57u,0x03FFA040u,0x04FF9050u,0x0000A0FFu,0x00EEAA80u,0x04607030u,0x0000FFFFu,0x04800000u,
+    0x07FFB080u,0x0000B080u,0x0000B080u,0x0000B080u,0x0000B080u,0x0000B0A0u,0x0000B080u,0x07FFB080u,
+    0x0000B080u,0x000060FFu,0x0000B080u,0x0000B080u,0x0000B080u,0x0000FFFFu,0x0000FFFFu,0x0000FF00u
+};
+static const u32 geo_mat_int[0x20] = {  /* flt_90BA0 */
+    0x3F800000u,0x3F4B4396u,0x3F2147AEu,0x3F004189u,0x3ECBC6A8u,0x3EA1CAC1u,0x3E808312u,0x3E4BC6A8u,
+    0x3E21CAC1u,0x3E000000u,0x3DCCCCCDu,0x3D8F5C29u,0x3D810625u,0x3D4CCCCDu,0x3D1FBE77u,0x3CFDF3B6u,
+    0x3CCCCCCDu,0x3C9BA5E3u,0x3C75C28Fu,0x3C449BA6u,0x3C23D70Au,0x3C016F00u,0x3BCE703Bu,0x3BA3D70Au,
+    0x3B7F9724u,0x3B4B295Fu,0x3B23D70Au,0x3AF9096Cu,0x3AC49BA6u,0x3A9D4952u,0x3A83126Fu,0x3A378034u
+};
+static void geo_material_init(void) {
+    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    u32 last = 0u; int i;
+    *(volatile u32 *)0x00800060u = 0x606u;     /* slot 0x60 = material/luma opcode (0x606) */
+    *fifo = 0u;                                 /* base  = 0    */
+    *fifo = 0x20u;                              /* count = 0x20 records */
+    for (i = 0; i < 0x20; i++) {
+        *fifo = geo_mat_hdr[i];                 /* material_num_floats[i] (= flt_90A20[i]) */
+        *fifo = geo_mat_int[i]; last = geo_mat_int[i];   /* flt_90BA0[i] */
+    }
+    *(volatile u32 *)0x00800100u = 0x1010u;     /* config-commit (sub_29148 tail)          */
+    *fifo = last;
+    geo_set_end_mark();                          /* flush through the GEO (our config-block idiom) */
+    geo_interrupt_wait();
+}
+
 /* Flush an empty list so the GEO renders nothing (clears the 3D plane, e.g. when
    a 3D game returns to the 2D launcher menu). */
 static void geo_clear(void) { geo_begin(); geo_end(); geo_flush(0x10000u); }
