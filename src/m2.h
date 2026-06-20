@@ -332,9 +332,20 @@ M2_API void m2_init(void) {
 
     m2_loadfont();   /* font into char RAM, one copy per palette bank */
 
-    /* clear both tile layers to the transparent space glyph (backdrop shows) */
-    m2_cleartiles(m2_tile(0, 0x20));
-    for (i = 0; i < (int)(M2_W * 64u); i++) M2_TILE_BG[i] = m2_tile(0, 0x20);
+    /* Clear the FULL FG+BG tilemap RAM (0x01000000..0x01008000 = 0x2000 u16 each) to
+     * the transparent space glyph, NOT just the 64x64 active region (good hygiene). */
+    { u16 sp = m2_tile(0, 0x20); int k;
+      for (k = 0; k < 0x2000; k++) { M2_TILE_FG[k] = sp; M2_TILE_BG[k] = sp; } }
+
+    /* ⭐ Clear the SEGAS24 WINDOW MASK at 0x0100C000 (0x1000 u16). This mask selects, per
+     * screen region, which tilemap layer (A/FG vs B/BG) the hardware displays (see MAME
+     * segaic24.cpp draw_rect's per-8px mask; STF's set_window_bit @0x2EE70 ORs/clears bits
+     * here, and STF zeroes it in init_scroll/scroll_all_init). Left UNINITIALISED it told
+     * the hardware to show the garbage B layer in random regions on SILICON = the
+     * screen-edge "bars" AND the manager's clipped text. MAME zero-inits it, hiding the
+     * bug. This is THE real fix (the tilemap clear above alone did NOT fix it). */
+    { volatile u16 *w = (volatile u16 *)0x0100C000u; int k;
+      for (k = 0; k < 0x1000; k++) w[k] = 0u; }
 
     /* I/O + serial bring-up, faithful to STF start_again_ip (_disable_ints).
      * REAL-HARDWARE init: in MAME the 8251 is a separate chip and the 315-5649's
