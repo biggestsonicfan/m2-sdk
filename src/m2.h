@@ -206,6 +206,12 @@ M2_API void m2_print(int col, int row, const char *s, int palbank) {
     for (i = 0; s[i]; i++)
         M2_TILE_FG[row * M2_W + col + i] = m2_tile(palbank, (u8)s[i]);
 }
+/* Set a colour group's INK colour (font pixel value 1 -> pen palbank*16+1).
+ * The gFont glyphs are TWO-LAYER: value 1 = ink (this), value 2 = an outline/shadow that
+ * renders through pen palbank*16+2. That pen is NOT set here, so the outline shows as
+ * whatever palram holds there — black where palram is 0 (the usual look). For a defined
+ * outline colour (or a guaranteed-black outline on silicon, where palram may be
+ * uninitialised) also call m2_setpal(palbank*16+2, outline_colour). */
 M2_API void m2_textpal(int palbank, u16 colour) { m2_setpal(palbank * 16 + 1, colour); }
 
 /* ---- input (315-5649) ----------------------------------------------------- */
