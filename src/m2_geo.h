@@ -134,14 +134,19 @@ static float geo__sqrt(float x) {
     return g;
 }
 
-/* Write an untextured colour header into texture-header RAM slot cb (th3=cb<<6,
- * colorbase==cb). Reference via tha = GEO_TEXRAM_BIT | (cb*4). Emit once per frame. */
+/* Write a colour header into texture-header RAM slot cb (th3=cb<<6, colorbase==cb).
+ * Reference via tha = GEO_TEXRAM_BIT | (cb*4). Emit once per frame.
+ * th0 = TEXTURED 128x128 (bit14=0x4000 | wbits2 | hbits2<<3): the STF models we instance
+ * (e.g. 456) carry textured faces, so on the real GEO a textured header paired with a
+ * TEXRAM pre-filled to a uniform opaque luma yields a clean flat colorbase fill. An
+ * untextured th0=0 made the textured model sample garbage TEXRAM = stripe noise on silicon
+ * (it only looked flat on MAME's lenient HLE). See memory/geo-texram-rendering. */
 static void geo_color_header(u32 cb) {
     geo__w(GEO_OP_TEXDATA);
     geo__w(GEO_TEXRAM_BIT | (cb * 4u));
     geo__w(4u);
-    geo__w(0u); geo__w(0u); geo__w(0u);     /* th0=0 (opaque solid), th1=0, th2=0 */
-    geo__w((cb & 0x3ffu) << 6);             /* th3: colorbase = (th3>>6)&0x3ff */
+    geo__w(0x4012u); geo__w(0u); geo__w(0u);  /* th0=textured 128x128, th1=lumabase0, th2=(0,0) */
+    geo__w((cb & 0x3ffu) << 6);               /* th3: colorbase = (th3>>6)&0x3ff */
 }
 
 /* Flat-colored quad (v0,v1,v2,v3 cyclic). */
@@ -342,16 +347,36 @@ static void geo_buffram_clear(void) {
         *(volatile u32 *)(GEO_BUFFERRAM + geo_buf_off[b]) = GEO_OP_END;
 }
 
-/* One-time GEO display-list setup (STF geo_initialize @0x169C): clear GEO ctl, prime
- * the four buffers empty, point the GEO at buffer 0, set ZCLIP. Call after the GEO is
- * booted and after geo_buffram_clear(), before the first frame. */
+static void geo_set_end_mark(void);   /* fwd decl: STF set_end_mark, used by geo_initialize */
+
+/* One-time GEO display-list setup — FAITHFUL port of STF geo_initialize @0x169C.
+ * The OLD version only zeroed BUFF_RAM from the i960 and poked the read/write regs once,
+ * leaving the GEO's OWN internal write pointers / bank state uninitialised -> on silicon
+ * the geometrizer rasterised a structured repeating pattern from boot (the vertical-bar
+ * stripe noise). STF instead drives an empty list THROUGH the GEO for each of buffers
+ * 0..2 (point GEO_WRITE at the buffer, push slot 0x0 x3, set the slot-0xF0 end mark),
+ * then BUFF_ADD=buf3 + set_end_mark — so the GEO initialises each buffer itself.
+ * NOTE: this is the absolute-address path the m2emu/MAME HLE mishandles (it fakes the
+ * GEO); we accept that divergence here — silicon is the target. */
 static void geo_initialize(void) {
-    *(volatile u32 *)GEO_CTL_REG = 0u;                    /* clear GEO ctl (0x98000c) */
-    geo_buffram_clear();                                  /* zero BUFF_RAM + END heads */
+    volatile u32 *g10 = (volatile u32 *)GEO_START;        /* GEO command region (0x800000) */
+    u32 r9, buf;
+    *(volatile u32 *)GEO_CTL_REG = 0u;                    /* clear GEO ctl (0x98000c)       */
+    geo_buffram_clear();                                  /* init_0: bulk-zero + END heads  */
+    *(volatile u32 *)0x00501008u = 0u;                    /* BUFF_MAX = 0                   */
+    for (r9 = 0u; r9 < 3u; r9++) {                        /* STF loop r9=0..2 (buffers 0-2) */
+        buf = GEO_BUFFERRAM + geo_buf_off[r9];
+        *(volatile u32 *)GEO_WRITE_REG = buf;             /* GEO_WRITE = this buffer        */
+        g10[0] = 0u; g10[0] = 0u; g10[0] = 0u;            /* slot 0x0 x3 (empty list head)  */
+        *(volatile u32 *)0x008000F0u = 0x00000F0Fu;       /* slot 0xF0 = end-mark command   */
+    }
+    buf = GEO_BUFFERRAM + geo_buf_off[3];                 /* buffer 3                       */
+    *(volatile u32 *)0x00501004u = buf;                   /* BUFF_ADD = buffer 3            */
+    *(volatile u32 *)GEO_WRITE_REG = buf;                 /* GEO_WRITE = buffer 3           */
+    *(volatile u8  *)0x0050100Cu = 3u;                    /* buffIndex = 3                  */
+    geo_set_end_mark();                                   /* commit buf3 (empty), flip -> 0 */
+    *(volatile u8  *)GEO_ZCLIP_REG = 0xFFu;               /* ZCLIP                          */
     g_geo_buf = 0u;
-    *(volatile u32 *)GEO_WRITE_REG = geo_buf_off[1];      /* next write target        */
-    *(volatile u32 *)GEO_READ_REG  = geo_buf_off[0];      /* GEO reads buffer 0       */
-    *(volatile u8  *)GEO_ZCLIP_REG = 0xFFu;               /* ZCLIP                    */
 }
 
 /* Commit the built list into the current buffer, point the GEO at it, then rotate
@@ -363,6 +388,9 @@ static void geo_flush_flip(void) {
     volatile u32 *buf = (volatile u32 *)(GEO_BUFFERRAM + off);
     u32 i;
     for (i = 0; i < g_geo_n; i++) buf[i] = g_geo[i];
+    /* GEO_READ_REG/WRITE_REG take the buffer OFFSET. The GEO masks to 0x7FFFC so abs vs
+     * offset is identical on silicon — the absolute form + a per-frame 0xF0F end-mark were
+     * tried but are HLE-incompatible (MAME's faked GEO corrupts over a few frames). */
     *(volatile u32 *)GEO_READ_REG = off;                 /* commit -> display        */
     g_geo_buf = (g_geo_buf + 1u) & 3u;                   /* flip                     */
     *(volatile u32 *)GEO_WRITE_REG = geo_buf_off[g_geo_buf];

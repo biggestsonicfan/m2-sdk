@@ -59,4 +59,16 @@ static void m2_setcolor(u32 colorbase, u16 bgr555) {
     ((volatile u16 *)M2_PALRAM)[(colorbase + 0x1000u) & 0xffffu] = bgr555;
 }
 
+/* init_pol_color (STF @0x11c24): load STF's full 1024-colour polygon colorbase
+ * palette from the data ROM into palram[0x1000..0x13ff]. Use this (instead of
+ * per-slot m2_setcolor) when drawing STF model-table objects that reference the
+ * game's own colorbase indices — e.g. textured models. Needs the STF data ROMs. */
+#define M2_ROM_POLY_PALETTE 0x02100000u   /* STF data ROM: 1024 BGR555 colorbase colours */
+static void m2_load_poly_palette(void) {
+    volatile u16 *src = (volatile u16 *)M2_ROM_POLY_PALETTE;
+    volatile u16 *dst = ((volatile u16 *)M2_PALRAM) + 0x1000u;
+    u32 i;
+    for (i = 0; i < 1024u; i++) dst[i] = src[i];
+}
+
 #endif /* M2_COLOR_H */
