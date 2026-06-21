@@ -54,10 +54,45 @@ static void m2_cop_boot(void) {
                      cpres_data, 14862, 0xA100, 0xA110, 0xC9400, 4954);
 }
 
-/* cpres2 = GEO / geometry (real hardware; no-op/HLE'd in MAME model2b). */
+/* GEO firmware upload — STF copro_down2 @0x1588, decoded from the i960 disasm. Same shape as
+ * m2__copro_upload EXCEPT one word: STF writes iop+0x104 from the firmware header word [2] (= 0
+ * for the GEO: `st r6,0x104(r3)` with r6 = cpres_start2[2]), whereas m2__copro_upload HARDCODES
+ * iop+0x104 = 1. That word is a boot-DMA descriptor (between dest@0x100 and count@0x108); =1 is
+ * wrong for the GEO and may corrupt its firmware DMA (the COP tolerates =1, the GEO may not).
+ * Everything else (dmacnt@0x108, syscon1@0x000, the 0x070 zero, 9351-short stream) matches the
+ * shared upload. (An earlier wp-TRACE reading misread these offsets as 0x040/0x070/0x00C and
+ * bricked the board — the DISASM above is authoritative.) hdr104 lets the caller pass header[2]. */
+static void m2__geo_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
+                           const u16 *fw, int nwords,
+                           u32 syscon0, u32 syscon1, u32 dmacfg, int dmacnt, u32 hdr104) {
+    volatile u32 *ctl  = (volatile u32 *)ctl_addr;
+    volatile u32 *fifo = (volatile u32 *)fifo_addr;
+    u32 save = *ctl;
+    int i;
+    *ctl = save | 0x80000000u;                                   /* halt (setbit 0x1F)      */
+    *(volatile u32 *)0x00980020u = *(volatile u32 *)0x00980020u & 0xFFFFFFFCu;  /* release reset */
+    *(volatile u32 *)(iop_base + 0x000) = syscon0;
+    *(volatile u32 *)(iop_base + 0x000) = 0;
+    *(volatile u32 *)(iop_base + 0x008) = dmacfg;
+    *(volatile u32 *)(iop_base + 0x070) = 0;
+    *(volatile u32 *)(iop_base + 0x100) = 0x20000;               /* boot dest (= header[1])  */
+    *(volatile u32 *)(iop_base + 0x104) = hdr104;                /* = header[2] (GEO: 0)     */
+    *(volatile u32 *)(iop_base + 0x108) = (u32)dmacnt;
+    *(volatile u32 *)(iop_base + 0x000) = syscon1;
+    *(volatile u32 *)(iop_base + 0x070) = 0xA1;
+    *(volatile u32 *)(iop_base + 0x070) = 0;
+    for (i = 0; i < nwords; i++) *fifo = fw[i];                  /* stream firmware          */
+    *ctl = save;                                                 /* run                      */
+}
+
 static void m2_geo_boot(void) {
-    m2__copro_upload(0x00980008u, 0x00840000u, 0x00804000u,
-                     cpres_data2, 9351, 0x3100, 0x3110, 0xC400, 3117);
+    /* hdr104 = STF cpres_start2 header[2] = the GEO boot-DMA INTERNAL MODIFY (stride) @0x840104.
+     * VERIFIED via IDA: the 3-word header preceding _cpres_data2 (@0xbd748) is {0xA1,0x20000,0x1},
+     * so header[2] = 0x1, NOT 0. copro_down2 writes 0x840104 = 0x1. A previous misread set this to
+     * 0 -> DMA stride 0 -> the GEO can't walk BUFF_RAM (GEO_RADDR pinned at 0, stripe field, no
+     * render); peek/MAME(HLE) can't see it. The COP boot hardcodes 0x104=1 and works -> match it. */
+    m2__geo_upload(0x00980008u, 0x00840000u, 0x00804000u,
+                   cpres_data2, 9351, 0x3100, 0x3110, 0xC400, 3117, /*hdr104=*/1u);
 }
 
 /* Boot both coprocessors (COP then GEO, per STF start-up order). */
