@@ -203,6 +203,89 @@ static void m2_cop_rmatrix(float m[12]) {
     int i; m2_cop(COP_RMATRIX); for (i = 0; i < 12; i++) m[i] = m2_cop_gf();
 }
 
+/* ===========================================================================
+ * Fixed camera — ported from STF camera_init @0x1F110 (stfdecomp rom_code1.s:30486).
+ *
+ * STF's camera_init runs a FIGHTER-TRACKING camera: cam_mode_9 (@0x6B1D8) reads the
+ * two fa_rob fighter structs, computes their midpoint + inter-fighter distance (COP
+ * dist3D), and dollies so both stay framed. None of that applies to a standalone /
+ * X11-server render, so we keep camera_init's STATIC pieces and drop the fighter logic:
+ *
+ *   - focus_dist_x = focus_dist_y = 280.0f (camera_init :30497, 0x438C0000) — the focal
+ *     length, fed to the GEO as the FOCAL register (slot 0x90 = 0x909 + focal pair,
+ *     exactly as camera_init :30836).
+ *   - scalar FOCAL/ZSORT/LIGHT operands init 0 (camera_init :30507-:30512 -> 0x24/26/28
+ *     of the camera struct) — confirms the COP submit may send 0 for these.
+ *   - the camera is applied by transforming each object's WORLD position into VIEW space
+ *     (world - eye, rotated by -yaw/-pitch) on the i960 and feeding the result to the
+ *     per-object COP_SET_POS. This is how STF works too: every object (incl. cam_mode_9's)
+ *     does push->set_identity->transform->submit, so the per-object bone always starts at
+ *     identity; the camera lives in the view-relative positions camera_work pre-computes,
+ *     NOT in a persistent COP view matrix.
+ *
+ * A fixed FRONT camera = eye at the origin, yaw=pitch=0 -> world_to_view is the identity,
+ * so an object placed at world (0,0,Z) submits with COP_SET_POS(0,0,Z) — identical to the
+ * proven render path. Move the eye / aim it and objects track correctly.
+ *
+ * NOT ported (camera_init :30848): GEO slot 0x160 = 0x1616 + a z-projection scale word
+ * ([0x5010C4]*[0x5010C8]); both operands are computed at runtime from the COP OP0x5E
+ * projection, so the exact value isn't statically known. The render works without it on
+ * MAME (HLE GEO); it's a candidate refinement for the silicon raster path.
+ * =========================================================================== */
+
+#define M2_FOCUS_DIST  280.0f       /* 0x438C0000 — camera_init :30497 */
+
+typedef struct {
+    float eye[3];               /* camera position in world space (looks down +Z) */
+    u32   yaw, pitch;           /* i16 view angles (0x10000 = 360deg); 0 = look +Z */
+    float focus;                /* focal length (focus_dist), default 280.0        */
+    /* derived by m2_cam_set_angles() from yaw/pitch — default to identity rotation */
+    float sy, cy, sx, cx;
+} m2_camera_t;
+
+static m2_camera_t m2_cam = { {0.0f, 0.0f, 0.0f}, 0u, 0u, M2_FOCUS_DIST,
+                              0.0f, 1.0f, 0.0f, 1.0f };
+
+static void m2_cam_set_eye(float x, float y, float z) {
+    m2_cam.eye[0] = x; m2_cam.eye[1] = y; m2_cam.eye[2] = z;
+}
+static void m2_cam_set_focus(float f) { m2_cam.focus = f; }
+
+/* Recompute the cached sin/cos for yaw & pitch. Uses the COP FIFO (cop_sincos), so call
+ * it OUTSIDE display-list building (e.g. once per frame before drawing), never between the
+ * COP command writes of an object submit — it would corrupt the in-flight command stream. */
+static void m2_cam_set_angles(u32 yaw, u32 pitch) {
+    m2_cam.yaw = yaw; m2_cam.pitch = pitch;
+    cop_sincos(yaw,   &m2_cam.sy, &m2_cam.cy);
+    cop_sincos(pitch, &m2_cam.sx, &m2_cam.cx);
+}
+
+/* World -> view (eye-relative): translate by -eye, yaw about Y, then pitch about X.
+ * out is the position to feed COP_SET_POS for an object at world position p. */
+static void m2_cam_world_to_view(const float p[3], float out[3]) {
+    float dx = p[0] - m2_cam.eye[0];
+    float dy = p[1] - m2_cam.eye[1];
+    float dz = p[2] - m2_cam.eye[2];
+    float x1 =  m2_cam.cy * dx - m2_cam.sy * dz;     /* yaw about Y   */
+    float z1 =  m2_cam.sy * dx + m2_cam.cy * dz;
+    float y2 =  m2_cam.cx * dy - m2_cam.sx * z1;     /* pitch about X */
+    float z2 =  m2_cam.sx * dy + m2_cam.cx * z1;
+    out[0] = x1; out[1] = y2; out[2] = z2;
+}
+
+/* GEO command FIFO + slot-register window (g10 = 0x800000 base, FIFO @ +0x4000). */
+#define M2_GEO_SLOT(n)  (*(volatile u32 *)(0x00800000u + (u32)(n)))
+#define M2_GEOFIFO      (*(volatile u32 *)0x00804000u)
+static void m2_geo_pf(float f) { union { float f; u32 u; } x; x.f = f; M2_GEOFIFO = x.u; }
+
+/* Per-frame GEO projection feed (camera_init :30836): FOCAL setup slot 0x90 = 0x909, then
+ * the focal_x / focal_y pair. Call once per frame before submitting objects. */
+static void m2_cam_geo_proj(void) {
+    M2_GEO_SLOT(0x90) = 0x909u;
+    m2_geo_pf(m2_cam.focus);
+    m2_geo_pf(m2_cam.focus);
+}
+
 /* Master Z-clip control register (write 0xFF to disable board-level near clip). */
 #define ZCLIP_REG  0x0181C000u
 
