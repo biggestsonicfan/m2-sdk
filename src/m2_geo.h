@@ -499,7 +499,12 @@ static void geo_material_init(void) {
     }
     *(volatile u32 *)0x00800100u = 0x1010u;     /* config-commit (sub_29148 tail)          */
     *fifo = last;
-    geo_set_end_mark();                          /* flush through the GEO (our config-block idiom) */
+    /* Commit + sync this material block. STF's set_material(0x29148)/sub_290FC(0x290FC) do NOT flush
+     * immediately (verified: callers @0x6A94 + camera_init @0x1F554 fall straight through, no
+     * set_end_mark) — STF keeps material in one continuous list flushed later. geoserial instead
+     * commits each init config block standalone (same as geo_region_fill, whose flush IS STF-faithful
+     * via sub_11FE4), so we flush here intentionally. */
+    geo_set_end_mark();
     geo_interrupt_wait();
 }
 
