@@ -6,8 +6,10 @@
  * Two-layer 4bpp glyphs: nibble value 1 = letter strokes, value 2 = fill/shadow.
  * (m2_gfx2d.h's g2d_font_atlas() inks value 1 for clean glyphs.)
  */
+#ifndef M2FONT_H
+#define M2FONT_H
 
-const unsigned char gFont[] =
+static const unsigned char gFont[] =
 {
 	0x00,0x00,0x00,0x00,
 	0x00,0x00,0x00,0x00,
@@ -1026,6 +1028,8 @@ const unsigned char gFont[] =
 	0x11,0x02,0x20,0x12,
 	0x22,0x00,0x00,0x22,
 };
+
+#endif /* M2FONT_H */
 
 
 

@@ -78,6 +78,13 @@ static void m2__geo_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
     *(volatile u32 *)(iop_base + 0x100) = 0x20000;               /* boot dest (= header[1])  */
     *(volatile u32 *)(iop_base + 0x104) = hdr104;                /* = header[2] (GEO: 0)     */
     *(volatile u32 *)(iop_base + 0x108) = (u32)dmacnt;
+    /* cpres2 GEO MSGR7 = the validation-bypass magic. The GEO microcode's command loop (_L2010C @PM0x10C)
+     * compares MSGR7 (dm(0xf)) against 0x7378842E; matching SKIPS the per-command opcode-shape validation
+     * (PM0x110-0x118). Without it the first non-conforming word jumps to _L20149 = an infinite error spin
+     * -> the GEO never consumes the display list (the "snow"/no-render on silicon; a confirmed cpres2
+     * stall in MAME). STF sets this; we must too. Written here while syscon0=0x3100 keeps host-packing OFF
+     * (bit4 clear) so it lands as one 32-bit word. MSGR7 = IOP reg 0x0F = iop+0x3C. */
+    *(volatile u32 *)(iop_base + 0x03C) = 0x7378842Eu;
     *(volatile u32 *)(iop_base + 0x000) = syscon1;
     *(volatile u32 *)(iop_base + 0x070) = 0xA1;
     *(volatile u32 *)(iop_base + 0x070) = 0;
@@ -201,6 +208,28 @@ static void m2_cop_wmatrix(const float m[12]) {
 }
 static void m2_cop_rmatrix(float m[12]) {
     int i; m2_cop(COP_RMATRIX); for (i = 0; i < 12; i++) m[i] = m2_cop_gf();
+}
+
+/* ---- COP object submit (polygon_submit op 0x78) — the proven-on-silicon object_data path ---------
+ * Instance a model-table object through the COP: CMD13x3 fence + SUBMIT(0x78) + the RAW 4-word model
+ * header {tpa,tha,oba,obc}; the COP writes MATRIX+OBJECT to BUFF_RAM at COP_WPOS (= the commit) and
+ * returns the running polygon counts. Push the transform (OBJECT/IDENTITY/SET_POS/ANG/SCALE) BEFORE
+ * calling this. g_cop_p/g_cop_p2 = running P2_POLYGON/POLYGON; reset to 0 at each frame's first submit.
+ * cf = the COP FIFO (0x00884000). (Ported out of geoserial.c so any project can submit objects.) */
+static u32 g_cop_p2, g_cop_p;
+static void cop_drain(volatile u32 *cf, u32 n) { volatile u32 d = 0u; while (n-- > 0u) d = *cf; (void)d; }
+static void cop_submit_object(volatile u32 *cf, const volatile u32 *hdr) {
+    u32 wr; volatile u32 s, p2, p;
+    *cf = 0x09801313u; *cf = 0x09801313u; *cf = 0x09801313u;  /* COP_CMD(0x13) x3 fence */
+    s = *cf;                                                  /* 1 sync read */
+    *cf = 0x3C007878u;                                        /* SUBMIT op 0x78 */
+    wr = *(volatile u32 *)0x00802008u;                        /* COP_WPOS */
+    *(volatile u32 *)0x00801008u = wr + 0x48u;                /* GEO_WRITE = COP_WPOS + 0x48 (reserve) */
+    *cf = wr; *cf = 0u;
+    *cf = hdr[0]; *cf = hdr[1]; *cf = hdr[2]; *cf = hdr[3];   /* raw model header (obc too big HANGS the COP) */
+    *cf = g_cop_p2; *cf = g_cop_p;                            /* P2_POLYGON, POLYGON (running) */
+    p2 = *cf; p = *cf;                                        /* read back updated counts */
+    g_cop_p2 = p2; g_cop_p = p; (void)s;
 }
 
 /* ===========================================================================
