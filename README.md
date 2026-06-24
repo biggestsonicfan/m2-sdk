@@ -32,10 +32,28 @@ cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_SOFTFLOAT=ON
 `M2_SOFTFLOAT` (and the `m2sdk_softfloat()` helper) live in
 [`cmake/m2sdk.cmake`](cmake/m2sdk.cmake); a consumer includes it and calls the
 helper. It applies `-msoft-float`, links the soft-float libgcc, and aliases the
-`-fleading-underscore` libcalls (`___mulsf3` → `__mulsf3`). Note: g2d's
-`direct_data` rendering is MAME-HLE-only regardless — a hardware build must use
-the `object_data` path (`geo_obj_*` / m2_geo.h). See m2-snake's Tempest, which
+`-fleading-underscore` libcalls (`___mulsf3` → `__mulsf3`). Note: g2d's *buffered*
+`direct_data` rendering (`m2_gfx2d.h`) is MAME-HLE-only — a hardware build must use
+the `object_data` path (`geo_obj_*` / m2_geo.h) instead. See m2-snake's Tempest, which
 selects render path + soft-float together via its `-DM2_HW` profile.
+
+### Real SHARC/GEO vs MAME HLE
+
+The SDK now boots the **real SHARC/GEO geometrizer** (see `m2_3d.h` GEO boot,
+`m2_geo.h` `geo_initialize`/`geometry_stuff`). Run MAME with **`M2_HLE_GEO_OFF`**
+set in the environment to exercise the real geometry program rather than MAME's
+HLE'd `geo_parse`. The proven on-silicon render path is **object_data**
+(`geo_initialize` once, then per-frame `geo_begin`…`geo_end`/`geo_flush`); see
+m2-snake's cube and Tempest `-DM2_HW`. There is also a newer DIRECT-FIFO path
+(`m2_text.h`/`m2_draw.h`, GEO cmd `0x01000202`) for pixel-coord 2D shapes/text:
+our own screen-space verts + per-quad material, giving multi-colour (a colorbase
+per quad) and a clean per-quad z-layer. It is wrapped in a frame loop —
+**`m2_frame_begin` / `m2_frame_commit` / `m2_frame_end`** (`m2_geo.h`) — and is
+MAME-proven with `M2_HLE_GEO_OFF` across multi-colour shapes, text, outlines, an
+xeyes window, and a live serial-input cursor demo (re-committed every frame); a
+silicon burn is still pending. The host owns the one-time GEO/COP boot + consumer
+prime (a few empty `m2_frame_begin`/`m2_frame_end` at startup); see `m2_frame_*`.
+g2d's buffered `direct_data` games render nothing with HLE off.
 
 `src/demo.c` is a ~40-line example: a bouncing ball, frame, slider and line, all
 drawn with the hardware-2D API.
@@ -50,8 +68,12 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_gfx2d.h` | **Hardware-2D / vector graphics** via the GEO `direct_data` path (no coprocessor). Flat-colour `rect`/`circle`/`line`/`quad`/`tri` (2D, painter's order) **and** real-Z depth-sorted 3D primitives (`g2d_vquad`/`g2d_vline`/`g2d_vtri`, `g2d_luma` shading, `g2d_zsort_fine`). |
 | `m2_color.h` | 3D colour pipeline (colorxlat/lumaram) — needed by `m2_gfx2d.h`. |
 | `m2_3d.h` | Coprocessor (COP/SHARC) bring-up + matrix/trig command interface. Pulls in the `cpres1/2` firmware + `m2_fastmath.h`. Only needed for COP-backed 3D math. |
-| `m2_geo.h` | Descriptive GEO display-list builder (object_data for real-hardware-portable geometry; direct_data primitives). |
+| `m2_geo.h` | Descriptive GEO display-list builder (object_data for real-hardware-portable geometry; direct_data primitives). Includes `geo_initialize`/`geometry_stuff` — the real-silicon GEO boot/frame model. |
+| `m2_color.h` | 3D colour pipeline (`m2_color_init` = colorxlat + LUMA2 ramp; `m2_load_poly_palette` = STF 1024 colorbase colours). Needed by `m2_gfx2d.h` and the silicon object_data path. |
+| `m2_text.h` | **Silicon-capable** text: COP model-456 glyphs (`m2_draw_text`, world coords) + `m2_text_screen` (pixel coords). gFont → 128×64 texram0 atlas. |
+| `m2_draw.h` | 2D filled shapes via the DIRECT-FIFO path: `m2_fill_rect`/`fill_ellipse`/`fill_circle` (+ `_o` outlines), `m2_draw_text_px`. Pixel-coord, multi-colour, z-layered; wrap in `m2_frame_begin`…`m2_frame_commit`/`m2_frame_end`. MAME-proven (`M2_HLE_GEO_OFF`); silicon burn pending. |
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
+| `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
@@ -70,7 +92,9 @@ The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
   faces with `g2d_luma(nx,ny,nz, lx,ly,lz)`. (The Tempest tube in the m2-snake
   project is the worked example.)
 
-Both paths render on MAME's HLE'd GEO and need **no coprocessor/firmware**.
+Both g2d paths render on MAME's HLE'd GEO and need **no coprocessor/firmware** —
+but neither survives `M2_HLE_GEO_OFF` (the real geometrizer). For silicon, use the
+object_data path (`m2_geo.h` `geo_obj_*`) or `m2_text.h`/`m2_draw.h`.
 
 ## Toolchain
 

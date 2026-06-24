@@ -26,7 +26,23 @@ see the result.
   asm does it). The sibling `m2-x11` build is newlib/ELF and differs — don't copy
   its `extern char _bss_start[]` idiom here.
 
-## Drawing: the g2d hardware-2D API (`m2_gfx2d.h`)
+## Which render path? (read this first)
+
+The SDK now boots the **real SHARC/GEO**; test it by launching MAME with
+**`M2_HLE_GEO_OFF`** set. That changes the rules:
+- **g2d (`m2_gfx2d.h`, below) is MAME-HLE-only.** Its buffered `direct_data` lists
+  render nothing under `M2_HLE_GEO_OFF` or on real hardware. Fine for HLE/quick demos.
+- **On silicon, use object_data** (`m2_geo.h`: `geo_initialize` once, then per-frame
+  `geo_begin`…`geo_obj_quad`/`geo_obj_line`…`geo_end`/`geo_flush`). Worked examples:
+  m2-snake's `cube_game.h` and Tempest `-DM2_HW`. This is the proven path.
+- `m2_text.h`/`m2_draw.h` are a newer DIRECT-FIFO path (pixel-coord shapes + text,
+  GEO cmd `0x01000202`): own screen-space verts + per-quad material → multi-colour +
+  per-quad z-layer. Wrapped in `m2_frame_begin`/`m2_frame_commit`/`m2_frame_end`
+  (`m2_geo.h`); MAME-proven with `M2_HLE_GEO_OFF` (multi-colour shapes/text/outlines,
+  an xeyes window, a live serial-input cursor demo). Silicon burn pending. The host
+  still owns the one-time GEO/COP boot + consumer prime.
+
+## Drawing: the g2d hardware-2D API (`m2_gfx2d.h`)  — MAME-HLE only
 
 ```c
 m2_init(); g2d_init();                 // g2d_init also loads the colour pipeline
