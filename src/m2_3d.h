@@ -108,6 +108,21 @@ static void m2_3d_boot(void) {
     m2_geo_boot();
 }
 
+/* STF cop_initialize: ARM the COP (cpres1) for rendering — wait until it reports ready (CTL 0x980004
+ * bit0), draining any pending words from its FIFO, then write 0 to the FIFO. STF's per-object render
+ * setup order is:  geo_func -> cop_initialize -> geo_initialize -> geometry_stuff -> texture upload.
+ * A project that draws via the object_data path (cop_submit_object / geo_obj_*) MUST call this after the
+ * COP boot + geo_func but BEFORE geo_initialize; without the COP-side arm the COP never commits its
+ * transformed geometry (the GEO side can be fully set up yet nothing renders). The geoserial kernel does
+ * this as cop_arm(); it was missing from the SDK, so standalone object_data builds skipped it. */
+static void m2_cop_initialize(void) {
+    volatile u32 *cop_ctl  = (volatile u32 *)0x00980004u;
+    volatile u32 *cop_fifo = (volatile u32 *)0x00884000u;
+    u32 g = 0;
+    while (!(*cop_ctl & 1u) && ++g < 200000u) (void)*cop_fifo;
+    *cop_fifo = 0u;
+}
+
 /* 3D solid-fill colour table. The solid scanline computes the pixel as
  *   gamma[ colorxlat[ palram[colorbase+0x1000] component ][ luma>>2 ] ]
  * so colorxlat must be filled across the LUMA axis (the tile path only fills the
