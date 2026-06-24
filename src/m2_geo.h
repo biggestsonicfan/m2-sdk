@@ -434,6 +434,52 @@ static void geo_set_end_mark(void) {
     *(volatile u32 *)0x00801008u = BUFF_ADD;
 }
 
+/* ---- FRAME ORCHESTRATION (the begin/commit the draw primitives need) -----------------------------
+ * The 2D/3D draw primitives (m2_draw.h shapes/text, the object_data submits) only emit geometry; they
+ * do NOT manage the GEO display-list lifecycle. A drawing FRAME is:
+ *
+ *     m2_frame_begin();         // per-frame GEO render-state + reset the COP poly counters
+ *     ... m2_fill_rect / m2_draw_text_px / cop_submit_object / geo_obj_* ...
+ *     m2_frame_commit();        // close the display list (no IRQ wait)  -- or:
+ *     m2_frame_end();           // close the list AND wait for the GEO frame-done IRQ (blocks ~vsync)
+ *
+ * Use m2_frame_end() for a steady ~60fps loop; m2_frame_commit() when the caller must keep doing other
+ * work (e.g. servicing a serial link) and can't block on the IRQ. Redraw EVERY frame — the GEO holds
+ * only the last committed list.
+ *
+ * CONSUMER / BOOT (host responsibility): the GEO + COP must already be BOOTED (m2_cop_boot / geo_init
+ * sequence — see the host kernel) and PRIMED as a continuous consumer before the first real frame. Prime
+ * it by committing a few empty frames once at startup:  for (i=0;i<8;i++){ m2_frame_begin(); m2_frame_end(); }
+ * This SDK supplies the per-frame orchestration; the one-time GEO/COP boot stays with the host project
+ * (it differs by transport — e.g. the RS-422 geoserial kernel vs a -DM2_HW standalone build). */
+
+/* STF set_mmode (event_loop @0x113B0 pushes set_mmode(3) then set_mmode(1) at the top of every frame):
+ * slot 0x70 = 0x707, then push the mode word to the GEO FIFO. */
+static void m2_geo_set_mmode(u32 v) {
+    *(volatile u32 *)0x00800070u = 0x00000707u;
+    *(volatile u32 *)0x00804000u = v;
+}
+/* STF set_window_data @0x35E0 (main_loop calls it every frame): slot 0x80 = 0x808, then push the
+ * Z-clip word (0x40800000) to the GEO FIFO — the per-frame slot-0x80 render-state. */
+static void m2_geo_set_window(void) {
+    *(volatile u32 *)0x00800080u = 0x00000808u;
+    *(volatile u32 *)0x00804000u = 0x40800000u;
+}
+
+/* Begin a frame: reset the COP poly counters ONCE per frame (so multiple object submits thread their
+ * BUFF_RAM append + per-poly texture headers — resetting per-submit = one colour/frame), then push the
+ * per-frame GEO render-state (window + mode). */
+static void m2_frame_begin(void) {
+    g_cop_p2 = 0u; g_cop_p = 0u;
+    m2_geo_set_window();
+    m2_geo_set_mmode(3u);
+    m2_geo_set_mmode(1u);
+}
+/* Commit the display list (END mark) WITHOUT waiting for the frame-done IRQ. */
+static void m2_frame_commit(void) { geo_set_end_mark(); }
+/* Commit the display list AND wait for the GEO frame-done IRQ (~vsync). */
+static void m2_frame_end(void) { geo_set_end_mark(); geo_interrupt_wait(); }
+
 /* STF sub_11FE4 @0x11FE4: fill one GEO region through the command FIFO at 0x804000
  * ((g10)[g12], g10=0x800000 g12=0x4000), then end-mark + interrupt_wait. The 4-short
  * pattern is pushed 1024x (count 0x1000). */

@@ -120,7 +120,7 @@ static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32
       *cf = 0x05000A0Au; *cf = 0u;                    /* ang_z = 0 */
       *cf = 0x03800707u;                              /* SCALE */
       *cf = sc.u; *cf = sc.u; *cf = sc.u;
-      /* poly counts reset once per frame (gs_frame_begin), NOT per submit, so objects thread */
+      /* poly counts reset once per frame (m2_frame_begin), NOT per submit, so objects thread */
       hdr[0] = 0x00800000u | uslot;         /* tpa = glyph UV   */
       hdr[1] = 0x00800000u | hslot;        /* tha = atlas hdr  */
       hdr[2] = g_flatquad;                            /* oba = model 456  */

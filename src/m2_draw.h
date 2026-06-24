@@ -1,17 +1,26 @@
 /*
- * m2_draw.h — 2D FILLED SHAPES (rect, ellipse, circle) via the COP object_data path (silicon-capable).
+ * m2_draw.h — 2D FILLED SHAPES + outlines via the GEO DIRECT-data path.
  *
- * Same trick as m2_text.h: each shape is a textured+translucent quad (model 456 instanced through the
- * COP) sampling a small SHAPE texture in texram0 — a SOLID block for rects, a CIRCLE disc for ellipses
- * — coloured by palram[cb+0x1000] and lit by the TEXPARAM ambient (so object.luma != 0). This is the
- * path that renders on real Model 2B silicon (direct_data g2d_rect/g2d_fill_ellipse are MAME-only).
+ * Each primitive is a screen-space quad submitted straight to the GEO DIRECT handler (FIFO cmd
+ * 0x01000202): OUR OWN pixel-coord verts + OUR OWN per-quad material (tha) INLINE — no ROM mesh, no
+ * per-face material walk. That is what gives this path two things the COP/model-456 object path could
+ * not: a DIFFERENT colorbase per quad (multi-colour in one frame) and a clean per-quad z-LAYER (the
+ * depth pz is a pure sort key; the emitter pre-multiplies coords so position is fixed). Flat fills go
+ * untextured; ellipses/circles sample a small disc texture; text samples the font atlas (m2_text.h).
+ * MAME-proven (real cpres2) across multi-colour shapes, text, outlines, xeyes; silicon burn pending.
  *
- * Pixel-coord API (UI / X-client friendly), uses the same screen->world map as m2_text.h:
- *     m2_shapes_init();                         // ONCE: write the shape textures (lazy via the draws)
- *     m2_fill_rect(x, y, w, h, cb);             // top-left x,y
- *     m2_fill_ellipse(cx, cy, rx, ry, cb);      // centre + radii
+ * FRAME MODEL — these calls only EMIT geometry; wrap them in a frame (see m2_geo.h m2_frame_*):
+ *     m2_frame_begin();
+ *     m2_fill_rect(x, y, w, h, cb);              // top-left x,y
+ *     m2_fill_ellipse(cx, cy, rx, ry, cb);       // centre + radii
  *     m2_fill_circle(cx, cy, r, cb);
- * cb = colorbase; set palram[cb+0x1000] to the BGR555 colour first (m2_draw_color()).
+ *     m2_fill_rect_o / _ellipse_o / _circle_o(..., fill_cb, outline_cb, thickness);  // bordered
+ *     m2_frame_commit();   // or m2_frame_end() to also wait on the frame-done IRQ
+ * Redraw every frame. The host must boot+prime the GEO/COP once first (see m2_frame_* notes).
+ *
+ * COLOUR: cb = colorbase = HUE (set palram[cb+0x1000] to a BGR555 colour via m2_draw_color()).
+ * m2_set_luma(0..255) = brightness/shade (textured fills honour it; the flat-fill path saturates).
+ * DEPTH/LAYER: m2_text_z (the screen-text depth global) is the pz for shapes too — smaller = nearer.
  */
 #ifndef M2_DRAW_H
 #define M2_DRAW_H
@@ -61,7 +70,7 @@ static u32 m2__fb(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }
 /* Per-quad LUMA (brightness), 0..255. The colorbase picks the HUE (which colorxlat R/G/B rows); luma
  * scales the intensity within those rows. At luma 255 every non-zero channel saturates (so colours
  * collapse to the 8 on/off combos); LOWER luma gives shades (e.g. a white colorbase at luma 0x60 = grey).
- * Set via m2_set_luma / gs_set_luma before a draw; the poly luma word is (m2_draw_luma << 23). */
+ * Set via m2_set_luma (host may wrap it, e.g. gs_set_luma); the poly luma word is (m2_draw_luma << 23). */
 static u32 m2_draw_luma = 0xFFu;
 static void m2_set_luma(u32 l) { m2_draw_luma = l & 0xFFu; }
 
