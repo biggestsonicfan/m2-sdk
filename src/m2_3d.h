@@ -230,7 +230,14 @@ static void m2_cop_rmatrix(float m[12]) {
  * header {tpa,tha,oba,obc}; the COP writes MATRIX+OBJECT to BUFF_RAM at COP_WPOS (= the commit) and
  * returns the running polygon counts. Push the transform (OBJECT/IDENTITY/SET_POS/ANG/SCALE) BEFORE
  * calling this. g_cop_p/g_cop_p2 = running P2_POLYGON/POLYGON; reset to 0 at each frame's first submit.
- * cf = the COP FIFO (0x00884000). (Ported out of geoserial.c so any project can submit objects.) */
+ * cf = the COP FIFO (0x00884000). (Ported out of geoserial.c so any project can submit objects.)
+ *
+ * MULTI-OBJECT (critical): to draw MORE THAN ONE object in a frame you MUST pass the RUNNING g_cop_p2/
+ * g_cop_p to the submit and READ BACK + SAVE the updated counts (this function does). Resetting the
+ * counts to 0,0 per object makes every object write from polygon slot 0 and OVERWRITE the previous one's
+ * polygons in BUFF_RAM -> the objects turn to chaos (e.g. "3 cubes -> mess"). Reset the counters ONCE per
+ * frame (m2_frame_begin does it), not per object. This is the poly-test threading; STF's main render uses
+ * a different per-object path (a separate, deeper COP<->GEO coherence concern). */
 static u32 g_cop_p2, g_cop_p;
 static void cop_drain(volatile u32 *cf, u32 n) { volatile u32 d = 0u; while (n-- > 0u) d = *cf; (void)d; }
 static void cop_submit_object(volatile u32 *cf, const volatile u32 *hdr) {
