@@ -41,6 +41,14 @@ SECTIONS
     _polyBank      = 0x00501000;  /* STF byte_501000 (change_poly_bank cache)  */
     _BUFF_ADD      = 0x00501004;  /* STF current display-list buffer address   */
     _buffIndex     = 0x0050100C;  /* STF byte_50100C (0..3 buffer index)       */
+    /* no-underscore aliases: the clang64 -msoft-float build links libgcc (built WITHOUT a leading
+     * underscore), so it compiles C WITHOUT -fleading-underscore; the de-underscored boot asm + C then
+     * reference these unmangled names. Both conventions resolve to the same STF addresses. */
+    RAMBASE_START  = 0x00500000;
+    timerFlag      = 0x0050008C;
+    polyBank       = 0x00501000;
+    BUFF_ADD       = 0x00501004;
+    buffIndex      = 0x0050100C;
 
     .data 0x00502000 : AT (_etext)
     {

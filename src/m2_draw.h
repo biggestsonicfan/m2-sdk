@@ -11,6 +11,7 @@
  *
  * FRAME MODEL — these calls only EMIT geometry; wrap them in a frame (see m2_geo.h m2_frame_*):
  *     m2_frame_begin();
+ *     m2_draw_frame_setup();                     // ONCE per frame: the DIRECT render-state prelude
  *     m2_fill_rect(x, y, w, h, cb);              // top-left x,y
  *     m2_fill_ellipse(cx, cy, rx, ry, cb);       // centre + radii
  *     m2_fill_circle(cx, cy, r, cb);
@@ -74,14 +75,14 @@ static u32 m2__fb(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }
 static u32 m2_draw_luma = 0xFFu;
 static void m2_set_luma(u32 l) { m2_draw_luma = l & 0xFFu; }
 
-/* flat-colour DIRECT quad over screen rect (x,y,w,h), colorbase cb, depth pz. */
-static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz) {
+/* DIRECT-path per-FRAME render state (window / projection / light / clip + TEXPARAM). The DIRECT
+ * shape & text primitives below only EMIT geometry — call this ONCE per frame, right after
+ * m2_frame_begin(), so this ~70-word prelude is NOT re-sent per primitive. (Re-sending it per quad
+ * was the old smoothness/perf killer: a dashed line of N quads paid N preludes.) Prelude from
+ * app_directtest, proven to reach the rasterizer. */
+static void m2_draw_frame_setup(void) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    u32 tha = 0x00800000u | (cb * 4u), zf = m2__fb(pz);
-    float l = (x - 248.0f) * pz,  r = ((x + w) - 248.0f) * pz;
-    float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
     int q;
-    /* DIRECT render-state prelude (from app_directtest, proven to reach the rasterizer) */
     *(volatile u32 *)0x00800080u = 0x808u; *fifo = 0x40800000u;
     *(volatile u32 *)0x00800090u = 0x909u; *fifo = 0x438C0000u; *fifo = 0x438C0000u;
     *(volatile u32 *)0x008000A0u = 0xA0Au; *fifo = 0x3F34CA6Eu; *fifo = 0xBF3167ABu; *fifo = 0x3E147F30u;
@@ -90,6 +91,15 @@ static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz)
     *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
     *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;
     for (q = 0; q < 0x20; q++) { *fifo = 0x000010FFu; *fifo = 0x3F800000u; }
+}
+
+/* flat-colour DIRECT quad over screen rect (x,y,w,h), colorbase cb, depth pz. */
+static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz) {
+    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    u32 tha = 0x00800000u | (cb * 4u), zf = m2__fb(pz);
+    float l = (x - 248.0f) * pz,  r = ((x + w) - 248.0f) * pz;
+    float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
+    /* render state is emitted ONCE per frame by m2_draw_frame_setup(); here just the header + quad */
     /* flat colorbase header at THIS cb's own tha slot (cb*4) */
     *fifo = 0x02000404u; *fifo = tha; *fifo = 4u;
     *fifo = 0u; *fifo = 0u; *fifo = 0u; *fifo = (cb & 0x3ffu) << 6;
@@ -118,15 +128,7 @@ static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float
     u32 pu0 = u0 << 3, pv0 = v0 << 3, pu1 = (u0 + uw) << 3, pv1 = (v0 + vh) << 3;
     float l = (x - 248.0f) * pz,  r = ((x + w) - 248.0f) * pz;
     float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
-    int q;
-    *(volatile u32 *)0x00800080u = 0x808u; *fifo = 0x40800000u;
-    *(volatile u32 *)0x00800090u = 0x909u; *fifo = 0x438C0000u; *fifo = 0x438C0000u;
-    *(volatile u32 *)0x008000A0u = 0xA0Au; *fifo = 0x3F34CA6Eu; *fifo = 0xBF3167ABu; *fifo = 0x3E147F30u;
-    *(volatile u32 *)0x00800030u = 0x303u;
-    *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;
-    *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
-    *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;
-    for (q = 0; q < 0x20; q++) { *fifo = 0x000010FFu; *fifo = 0x3F800000u; }
+    /* render state is emitted ONCE per frame by m2_draw_frame_setup() */
     /* texture header (cb's slot) + per-vert UVs (v0 TL, v1 TR, v2 BR, v3 BL) */
     *fifo = 0x02000404u; *fifo = tha; *fifo = 4u;
     *fifo = th0; *fifo = 0u; *fifo = th2; *fifo = (cb & 0x3ffu) << 6;
@@ -135,7 +137,14 @@ static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float
     *fifo = pv0; *fifo = pu1;   /* v1 TR */
     *fifo = pv1; *fifo = pu1;   /* v2 BR */
     *fifo = pv1; *fifo = pu0;   /* v3 BL */
-    /* DIRECT quad: tpa=UV slot; verts TR,TL,BR,BL; dist -> texlod 0 (base mip) */
+    /* DIRECT quad: tpa=UV slot; verts TR,TL,BR,BL.
+     * dist word = texlod (handler decodes texlod = ((w>>8)&0x7f80) - 0x3f80 + log_ram[w&0x7fff], then
+     * mml = -texlod + log2(z), level = clamp(mml>>7,0,max)). 0x3F800000 -> texlod 0 -> the NATURAL
+     * z-based mip, which for our glyph depths is the level that actually renders the atlas correctly.
+     * NOTE: do NOT force level 0 here (0x7F800000 drives mml hugely negative -> level 0): level 0 of this
+     * atlas renders as SOLID BLOCKS in MAME (verified) — every glyph collapses to a filled cell. So keep
+     * the natural mip. Our pz is a 2D LAYER not a real depth, so the GEO's z-based auto-mip can't pick by
+     * glyph SIZE — small-text mip selection is done MANUALLY (see m2_text.h / m2_draw_glyph_px). */
     *fifo = 0x01000202u;
     *fifo = 0x00800000u | uvoff; *fifo = tha;
     *fifo = m2__fb(r); *fifo = m2__fb(t); *fifo = zf;
@@ -195,6 +204,9 @@ static void m2_fill_circle_o(float cx, float cy, float r, u32 fill_cb, u32 outli
  * Atlas orientation matches the natural DIRECT UV (verified: the full atlas renders upright). */
 static float m2_text_px_advance = 1.0f;   /* glyph advance as a fraction of the cell size sz */
 
+/* Screen-space glyph: a DIRECT textured+translucent quad sampling the glyph's 8x8 cell in the 128x64
+ * font atlas. (A small-text AA "mipA" was tried but reverted — the LOD0->mipA size selection hit a
+ * soft-float miscompile; small text is the plain LOD0 downsample, legible but blocky < ~6px.) */
 static void m2_draw_glyph_px(float px, float py, float sz, u32 cb, u32 c) {
     u32 ax = (c & 15u) * 8u, ay = ((c >> 4) & 7u) * 8u;   /* glyph cell in the 128x64 (16x8) atlas */
     m2_font_atlas();

@@ -18,16 +18,19 @@ Build a different program with `-DM2_GAME=<name>` (compiles `src/<name>.c`).
 Drop your own `.c` in `src/` and reconfigure. Or use the equivalent batch script:
 `cmd /c ".\build_clang64.bat demo"`.
 
-### Soft-float (real hardware / m2emulator)
+### Soft-float (DEFAULT — the real i960 has no usable FPU)
 
-**m2emulator does not emulate the i960's FPU** — native i960 FP opcodes
-(`mulr`/`addr`/`cvtir`/…) run on MAME's i960 core (and the real Model 2 i960KB,
-which has a working FPU) but are **invalid opcodes on m2emulator**. To run there,
-build soft-float so every float op becomes a libgcc call (zero i960 FP):
+**The real Model 2 i960 has no usable FPU.** MAME *emulates* one, so native i960 FP
+opcodes (`mulr`/`addr`/`cvtir`/…) "work" in MAME but are **invalid opcodes on real
+hardware AND m2emulator**. So the build **defaults to soft-float** (every float op →
+a libgcc call, zero i960 FP). You don't need to ask for it:
 
 ```sh
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_SOFTFLOAT=ON
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake   # soft-float by default
 ```
+
+Opt out only for a MAME-only hard-float build: `-DM2_SOFTFLOAT=OFF` (cmake) or
+`set M2_SOFTFLOAT=0` (build_clang64.bat).
 
 `M2_SOFTFLOAT` (and the `m2sdk_softfloat()` helper) live in
 [`cmake/m2sdk.cmake`](cmake/m2sdk.cmake); a consumer includes it and calls the
@@ -39,21 +42,29 @@ selects render path + soft-float together via its `-DM2_HW` profile.
 
 ### Real SHARC/GEO vs MAME HLE
 
-The SDK now boots the **real SHARC/GEO geometrizer** (see `m2_3d.h` GEO boot,
-`m2_geo.h` `geo_initialize`/`geometry_stuff`). Run MAME with **`M2_HLE_GEO_OFF`**
+The SDK boots the **real SHARC/GEO geometrizer**. Run MAME with **`M2_HLE_GEO_OFF`**
 set in the environment to exercise the real geometry program rather than MAME's
-HLE'd `geo_parse`. The proven on-silicon render path is **object_data**
-(`geo_initialize` once, then per-frame `geo_begin`…`geo_end`/`geo_flush`); see
-m2-snake's cube and Tempest `-DM2_HW`. There is also a newer DIRECT-FIFO path
-(`m2_text.h`/`m2_draw.h`, GEO cmd `0x01000202`) for pixel-coord 2D shapes/text:
-our own screen-space verts + per-quad material, giving multi-colour (a colorbase
-per quad) and a clean per-quad z-layer. It is wrapped in a frame loop —
-**`m2_frame_begin` / `m2_frame_commit` / `m2_frame_end`** (`m2_geo.h`) — and is
-MAME-proven with `M2_HLE_GEO_OFF` across multi-colour shapes, text, outlines, an
-xeyes window, and a live serial-input cursor demo (re-committed every frame); a
-silicon burn is still pending. The host owns the one-time GEO/COP boot + consumer
-prime (a few empty `m2_frame_begin`/`m2_frame_end` at startup); see `m2_frame_*`.
-g2d's buffered `direct_data` games render nothing with HLE off.
+HLE'd `geo_parse`. g2d's buffered `direct_data` (`m2_gfx2d.h`) renders **nothing**
+with HLE off. Two paths DO render on the real GEO:
+
+- **3D model-table objects → `m2_obj.h`** (the COP-bridge path; m2-snake's ice-cube
+  sandbox). One-call boot **`m2_silicon_boot()`**, then per frame: `m2_frame_begin()`
+  → **`m2_obj_frame_setup()`** (projection basis, ONCE/frame) → `m2_obj_submit(...)`
+  per object → `m2_solid_quad(...)` for flat-colour quads → `m2_frame_commit()`. The
+  COP must drive the geometry (a raw BUFF_RAM write doesn't commit on silicon).
+- **2D pixel-coord shapes/text → `m2_draw.h`/`m2_text.h`** (DIRECT-FIFO cmd
+  `0x01000202`; m2-snake's Pong). `m2_frame_begin()` → **`m2_draw_frame_setup()`**
+  (render-state prelude, ONCE/frame) → `m2_fill_rect`/`m2_draw_text_px`/… →
+  `m2_frame_commit()`. Multi-colour (a colorbase per quad), per-quad z-layer.
+
+Pacing: `m2_frame_commit()` + `m2_vsync()` = 60fps; `m2_frame_end()` = 2-vblank/30fps
+(STF parity). Prime the GEO once at startup with a few empty `m2_frame_begin/end`.
+
+**Hard colour constraint:** a textured polygon's texel only supplies the **luma**
+(brightness) of its single `colorbase` hue — there is **no per-texel palette-colour**
+mode on this GEO (verified in MAME `model2rd.ipp`). Multi-hue scenes therefore need
+multiple colorbases (one per quad): a gradient = N colour bands, a checker =
+interleaved colorbase cells. (`m2_solid_quad` is one colorbase per call.)
 
 `src/demo.c` is a ~40-line example: a bouncing ball, frame, slider and line, all
 drawn with the hardware-2D API.
@@ -71,7 +82,9 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_geo.h` | Descriptive GEO display-list builder (object_data for real-hardware-portable geometry; direct_data primitives). Includes `geo_initialize`/`geometry_stuff` — the real-silicon GEO boot/frame model. |
 | `m2_color.h` | 3D colour pipeline (`m2_color_init` = colorxlat + LUMA2 ramp; `m2_load_poly_palette` = STF 1024 colorbase colours). Needed by `m2_gfx2d.h` and the silicon object_data path. |
 | `m2_text.h` | **Silicon-capable** text: COP model-456 glyphs (`m2_draw_text`, world coords) + `m2_text_screen` (pixel coords). gFont → 128×64 texram0 atlas. |
-| `m2_draw.h` | 2D filled shapes via the DIRECT-FIFO path: `m2_fill_rect`/`fill_ellipse`/`fill_circle` (+ `_o` outlines), `m2_draw_text_px`. Pixel-coord, multi-colour, z-layered; wrap in `m2_frame_begin`…`m2_frame_commit`/`m2_frame_end`. MAME-proven (`M2_HLE_GEO_OFF`); silicon burn pending. |
+| `m2_draw.h` | 2D filled shapes via the DIRECT-FIFO path: `m2_fill_rect`/`fill_ellipse`/`fill_circle` (+ `_o` outlines), `m2_draw_text_px`. Pixel-coord, multi-colour, z-layered. Per frame: `m2_frame_begin` → **`m2_draw_frame_setup`** (render-state ONCE/frame) → draws → `m2_frame_commit`. MAME-proven (`M2_HLE_GEO_OFF`). |
+| `m2_obj.h` | **Silicon 3D objects** (COP-bridge): `m2_silicon_boot` (one-call bring-up), `m2_obj_frame_setup` (projection ONCE/frame), `m2_obj_submit` (a model-table object), `m2_solid_quad` (flat-colour quad). Pulls in `stf_cop_preamble.h`. m2-snake's ice-cube sandbox. |
+| `m2_tex_codec.h` | Decode an STF compressed texture page from the texture ROM into a GEO sheet (`tex_load_atlas`) — textures straight from the ROM source, no embedded blob. |
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
