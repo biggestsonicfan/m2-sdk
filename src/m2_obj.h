@@ -68,17 +68,9 @@ static void m2_silicon_boot(void) {
 #define M2_OBJ_PATCH_Y 896u
 #endif
 #define M2_OBJ_PATCH_TH2 (((M2_OBJ_PATCH_X/32u)&0x3fu) | (((M2_OBJ_PATCH_Y/32u)&0x1fu)<<6))
-#define M2_OBJ_TEXRAM0   0x11000000u
 
 static int m2__obj_patch_done = 0;
-static void m2__obj_texel(int x, int y, u8 v) {
-    volatile u32 *T0 = (volatile u32 *)M2_OBJ_TEXRAM0;
-    u32 off = (u32)((y / 2) * 512 + (x / 2));
-    u32 widx = off >> 1;
-    int sh = ((x & 1) ? 0 : 4) + ((y & 1) ? 0 : 8) + ((off & 1) ? 16 : 0);
-    u32 w = T0[widx];
-    T0[widx] = (w & ~(0xFu << sh)) | ((u32)(v & 0xf) << sh);
-}
+/* texel write is shared: m2_texram0_texel (m2font.h). */
 /* Fill the 128x128 uniform-luma patch (opaque texel 0xE). Idempotent; call after your texram is set
  * up (also lazily run by m2_solid_quad). */
 static void m2_obj_fill_patch(void) {
@@ -86,7 +78,7 @@ static void m2_obj_fill_patch(void) {
     if (m2__obj_patch_done) return;
     for (y = 0; y < 128; y++)
         for (x = 0; x < 128; x++)
-            m2__obj_texel((int)M2_OBJ_PATCH_X + x, (int)M2_OBJ_PATCH_Y + y, 0xEu);
+            m2_texram0_texel((int)M2_OBJ_PATCH_X + x, (int)M2_OBJ_PATCH_Y + y, 0xEu);
     m2__obj_patch_done = 1;
 }
 /* Write a flat-colour texture header for colorbase cb into texture_ram (slot cb*4), sampling the
@@ -107,13 +99,9 @@ static void m2_obj_frame_setup(void) {
     volatile u32 *cf   = (volatile u32 *)0x00884000u;            /* COP FIFO */
     volatile u32 *fifo = (volatile u32 *)0x00804000u;            /* GEO FIFO */
     m2_cam_geo_proj();                                           /* GEO FOCAL slot 0x90 */
-    *(volatile u32 *)0x008000A0u = 0xA0Au;                       /* slot 0xA0 LIGHT */
-    *fifo = 0x3F3504EDu; *fifo = 0xBF2F9844u; *fifo = 0x3E2FEF42u;
-    *(volatile u32 *)0x00800030u = 0x303u;                       /* WINDOW */
-    *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;
-    *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
-    { int q; *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;     /* TEXPARAM table */
-      for (q = 0; q < 0x20; q++) { *fifo = 0x000060FFu; *fifo = 0x3F800000u; } }
+    m2_geo_fifo_light(0x3F3504EDu, 0xBF2F9844u, 0x3E2FEF42u);    /* slot 0xA0 LIGHT */
+    m2_geo_fifo_window_full();                                   /* WINDOW + clip   */
+    m2_geo_fifo_texparam(0x000060FFu);                           /* TEXPARAM table  */
     *fifo = 0x0B001616u; *fifo = 0x45200000u;                    /* OP_LOD base mip 2560.0 */
     { u32 k = 0u;
       while (k < COP_PREAMBLE_N) {

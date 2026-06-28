@@ -32,6 +32,18 @@ typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;
 
+/* Pure-C Newton sqrt — the SDK's one sqrt (was duplicated as g2d__sqrt/geo__sqrt).
+ * Do NOT route this through the COP (m2_cop_sqrt): COP_SQRT is always "defined"
+ * (an opcode macro, not a feature flag), and waiting on the COP math FIFO can hang
+ * the render loop. The COP is only an accelerator; the C path is correct under
+ * soft-float and needs no libm. */
+static float m2_sqrtf(float x) {
+    float g; int i;
+    if (x <= 0.0f) return 0.0f;
+    g = x; for (i = 0; i < 8; i++) g = 0.5f * (g + x / g);
+    return g;
+}
+
 /* SDK linkage: defaults to `static` (existing builds unchanged). Build the
  * main/'kernel' program with -DM2_API= to emit these as GLOBAL symbols so
  * uploaded subprograms can resolve them via the kernel's map (ld --just-symbols).

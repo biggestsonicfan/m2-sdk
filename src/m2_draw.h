@@ -26,7 +26,7 @@
 #ifndef M2_DRAW_H
 #define M2_DRAW_H
 
-#include "m2_text.h"   /* m2__font_texel, the screen->world globals, cop_submit_object, m2_cam, g_flatquad */
+#include "m2_text.h"   /* m2_font_atlas/m2_texram0_texel (m2font.h), screen->world globals, cop_submit_object, m2_cam, g_flatquad */
 
 /* shape textures live in texram0 just BELOW the 128x64 font atlas (y >= 64). Sampled with a 128x128
  * texture header (th0 hbits=2) + absolute UV, exactly like the glyphs. */
@@ -52,12 +52,12 @@ static void m2_shapes_init(void) {
     for (y = 0; y < M2_CIRC_D; y++)
         for (x = 0; x < M2_CIRC_D; x++) {
             int dx = (int)x - r, dy = (int)y - r;
-            m2__font_texel((int)(M2_CIRC_X + x), (int)(M2_CIRC_Y + y),
+            m2_texram0_texel((int)(M2_CIRC_X + x), (int)(M2_CIRC_Y + y),
                            (u8)((dx * dx + dy * dy <= r2) ? 14 : 0x0f));
         }
     for (y = 0; y < M2_SOLID_D; y++)
         for (x = 0; x < M2_SOLID_D; x++)
-            m2__font_texel((int)(M2_SOLID_X + x), (int)(M2_SOLID_Y + y), 14);
+            m2_texram0_texel((int)(M2_SOLID_X + x), (int)(M2_SOLID_Y + y), 14);
     m2__shapes_loaded = 1;
 }
 
@@ -82,15 +82,11 @@ static void m2_set_luma(u32 l) { m2_draw_luma = l & 0xFFu; }
  * app_directtest, proven to reach the rasterizer. */
 static void m2_draw_frame_setup(void) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    int q;
-    *(volatile u32 *)0x00800080u = 0x808u; *fifo = 0x40800000u;
-    *(volatile u32 *)0x00800090u = 0x909u; *fifo = 0x438C0000u; *fifo = 0x438C0000u;
-    *(volatile u32 *)0x008000A0u = 0xA0Au; *fifo = 0x3F34CA6Eu; *fifo = 0xBF3167ABu; *fifo = 0x3E147F30u;
-    *(volatile u32 *)0x00800030u = 0x303u;
-    *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;
-    *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
-    *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;
-    for (q = 0; q < 0x20; q++) { *fifo = 0x000010FFu; *fifo = 0x3F800000u; }
+    *(volatile u32 *)0x00800080u = 0x808u; *fifo = 0x40800000u;                       /* ZSORT     */
+    *(volatile u32 *)0x00800090u = 0x909u; *fifo = 0x438C0000u; *fifo = 0x438C0000u;  /* FOCAL 280 */
+    m2_geo_fifo_light(0x3F34CA6Eu, 0xBF3167ABu, 0x3E147F30u);
+    m2_geo_fifo_window_full();
+    m2_geo_fifo_texparam(0x000010FFu);
 }
 
 /* flat-colour DIRECT quad over screen rect (x,y,w,h), colorbase cb, depth pz. */

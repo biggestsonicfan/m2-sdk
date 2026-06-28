@@ -35,17 +35,36 @@ target_link_options(game.elf PRIVATE
     "-T${CMAKE_SOURCE_DIR}/lib/testlinkrom_elf.ld"
     "-Wl,-Map=game.map")
 
+# Soft-float (no i960 hardware FP) — the DEFAULT. The real i960 has no usable FPU, so a
+# program for real hardware / m2emulator (e.g. hwdemo's m2_obj.h object_data path) must
+# build soft-float. m2sdk.cmake defines the option (default ON). Opt out for a MAME-only
+# hard-float build:  -DM2_SOFTFLOAT=OFF  (cmake)  /  set M2_SOFTFLOAT=OFF  (build_clang64.bat).
+include("${CMAKE_SOURCE_DIR}/cmake/m2sdk.cmake")
+if(M2_SOFTFLOAT)
+    m2sdk_softfloat(game.elf)
+endif()
+
+# NOTE on scalar float: with soft-float ON (above), the SDK's m2_cop_fadd/fmul/... map to
+# plain C operators (m2_fastmath.h) that compile to libgcc soft-float — already FP-free,
+# no SHARC round-trip. Do NOT define M2_NO_FASTMATH to "use the coprocessor": that routes
+# scalar math through the COP FIFO, which buys nothing here (soft-float is already
+# FPU-free) and, issued per-frame, shares the FIFO with the geometry submit and crashes
+# m2emulator. The SHARC already does the real per-frame work (the object_data transform).
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 # ROM image (raw binary, IMI/PRCB at offset 0) -> split into the program ROM pair.
-add_custom_command(TARGET game.elf POST_BUILD
+# Always-run target (not a POST_BUILD step): the sibling m2-snake build targets the
+# SAME sfight ROM pair, so every build must (re)stamp roms/ even when game.elf itself
+# is unchanged — otherwise a clobbered/deleted roms/ wouldn't be regenerated.
+add_custom_target(rom ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/roms"
-    COMMAND ${CMAKE_OBJCOPY} -O binary game.elf game.bin
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/stfbin2rom.py"
             --input game.bin --output "${CMAKE_SOURCE_DIR}/roms"
     COMMAND ${CMAKE_COMMAND} -E echo
             "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16"
-    BYPRODUCTS game.bin
+    DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)
 

@@ -22,23 +22,25 @@ Drop your own `.c` in `src/` and reconfigure. Or use the equivalent batch script
 
 **The real Model 2 i960 has no usable FPU.** MAME *emulates* one, so native i960 FP
 opcodes (`mulr`/`addr`/`cvtir`/…) "work" in MAME but are **invalid opcodes on real
-hardware AND m2emulator**. So the build **defaults to soft-float** (every float op →
-a libgcc call, zero i960 FP). You don't need to ask for it:
+hardware AND m2emulator**. So the build **defaults to soft-float**: every float op
+becomes a libgcc call (zero i960 FP), and the program runs on silicon and m2emulator
+out of the box. You don't need to ask for it:
 
 ```sh
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake   # soft-float by default
 ```
 
-Opt out only for a MAME-only hard-float build: `-DM2_SOFTFLOAT=OFF` (cmake) or
-`set M2_SOFTFLOAT=0` (build_clang64.bat).
+Opt **out** only for a MAME-only hard-float build: `-DM2_SOFTFLOAT=OFF` (cmake) or
+`set M2_SOFTFLOAT=OFF` (build_clang64.bat).
 
-`M2_SOFTFLOAT` (and the `m2sdk_softfloat()` helper) live in
-[`cmake/m2sdk.cmake`](cmake/m2sdk.cmake); a consumer includes it and calls the
-helper. It applies `-msoft-float`, links the soft-float libgcc, and aliases the
-`-fleading-underscore` libcalls (`___mulsf3` → `__mulsf3`). Note: g2d's *buffered*
-`direct_data` rendering (`m2_gfx2d.h`) is MAME-HLE-only — a hardware build must use
-the `object_data` path (`geo_obj_*` / m2_geo.h) instead. See m2-snake's Tempest, which
-selects render path + soft-float together via its `-DM2_HW` profile.
+The `M2_SOFTFLOAT` option + the `m2sdk_softfloat()` helper live in
+[`cmake/m2sdk.cmake`](cmake/m2sdk.cmake) (included by the SDK's `CMakeLists.txt`, and
+by consumer projects). It applies `-msoft-float`, links the soft-float libgcc, and
+aliases the `-fleading-underscore` libcalls (`___mulsf3` → `__mulsf3`). Soft-float is
+necessary but not sufficient for silicon: a hardware build must also use a render path
+that drives the **real GEO** — `m2_obj.h` object_data (see `src/hwdemo.c`) — not the
+MAME-HLE g2d `direct_data` path. (`src/demo.c`/`fontdemo.c` use g2d, so they stay
+MAME-only regardless of float mode.)
 
 ### Real SHARC/GEO vs MAME HLE
 
@@ -67,7 +69,16 @@ multiple colorbases (one per quad): a gradient = N colour bands, a checker =
 interleaved colorbase cells. (`m2_solid_quad` is one colorbase per call.)
 
 `src/demo.c` is a ~40-line example: a bouncing ball, frame, slider and line, all
-drawn with the hardware-2D API.
+drawn with the hardware-2D API (g2d, **MAME-only**).
+
+`src/hwdemo.c` is the **silicon / m2emulator** sibling — the same kind of scene
+(border, colour bands, outlined panel, bouncing block), built on the **object_data
+COP-bridge path** (`m2_obj.h`: `m2_silicon_boot` + `m2_solid_quad`) and a soft-float
+build, so it runs on **m2emulator** and real hardware (and MAME under
+`M2_HLE_GEO_OFF`): `set M2_SOFTFLOAT=ON` then `build_clang64.bat hwdemo` (or
+`-DM2_GAME=hwdemo -DM2_SOFTFLOAT=ON`). NOTE: the DIRECT-FIFO 2D path (`m2_draw.h`)
+renders under MAME's HLE-off but did **not** display on m2emulator — `m2_obj.h`
+object_data is the portable silicon path (as m2-snake's `-DM2_HW` profile uses).
 
 ## Modules (`src/`)
 
@@ -77,10 +88,9 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 |---|---|
 | `m2.h` | Core board: video bring-up, palette/tiles/text, input, sound, vblank pacing. Pulls in `m2font.h` + `m2_rand.h`. Include this first. |
 | `m2_gfx2d.h` | **Hardware-2D / vector graphics** via the GEO `direct_data` path (no coprocessor). Flat-colour `rect`/`circle`/`line`/`quad`/`tri` (2D, painter's order) **and** real-Z depth-sorted 3D primitives (`g2d_vquad`/`g2d_vline`/`g2d_vtri`, `g2d_luma` shading, `g2d_zsort_fine`). |
-| `m2_color.h` | 3D colour pipeline (colorxlat/lumaram) — needed by `m2_gfx2d.h`. |
+| `m2_color.h` | 3D colour pipeline (`m2_color_init` = colorxlat + LUMA2 ramp; `m2_load_poly_palette` = STF 1024 colorbase colours). Needed by `m2_gfx2d.h` and the silicon object_data path. |
 | `m2_3d.h` | Coprocessor (COP/SHARC) bring-up + matrix/trig command interface. Pulls in the `cpres1/2` firmware + `m2_fastmath.h`. Only needed for COP-backed 3D math. |
 | `m2_geo.h` | Descriptive GEO display-list builder (object_data for real-hardware-portable geometry; direct_data primitives). Includes `geo_initialize`/`geometry_stuff` — the real-silicon GEO boot/frame model. |
-| `m2_color.h` | 3D colour pipeline (`m2_color_init` = colorxlat + LUMA2 ramp; `m2_load_poly_palette` = STF 1024 colorbase colours). Needed by `m2_gfx2d.h` and the silicon object_data path. |
 | `m2_text.h` | **Silicon-capable** text: COP model-456 glyphs (`m2_draw_text`, world coords) + `m2_text_screen` (pixel coords). gFont → 128×64 texram0 atlas. |
 | `m2_draw.h` | 2D filled shapes via the DIRECT-FIFO path: `m2_fill_rect`/`fill_ellipse`/`fill_circle` (+ `_o` outlines), `m2_draw_text_px`. Pixel-coord, multi-colour, z-layered. Per frame: `m2_frame_begin` → **`m2_draw_frame_setup`** (render-state ONCE/frame) → draws → `m2_frame_commit`. MAME-proven (`M2_HLE_GEO_OFF`). |
 | `m2_obj.h` | **Silicon 3D objects** (COP-bridge): `m2_silicon_boot` (one-call bring-up), `m2_obj_frame_setup` (projection ONCE/frame), `m2_obj_submit` (a model-table object), `m2_solid_quad` (flat-colour quad). Pulls in `stf_cop_preamble.h`. m2-snake's ice-cube sandbox. |

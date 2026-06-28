@@ -9,7 +9,7 @@
  * Run it by overriding the sfight program EPROM pair in MAME (see README).
  *
  * Shows the whole pipeline: init -> per-frame g2d_begin()/draw/g2d_end() ->
- * vsync. The textured font (g2d_font_atlas + g2d_ttext) composites over arbitrary
+ * vsync. The textured font (m2_font_atlas + g2d_ttext) composites over arbitrary
  * 2D content, takes a colorbase tint, and scales.
  */
 #include "m2.h"          /* core board: video, palette, input, vblank. include first */
@@ -27,7 +27,7 @@ int main(void) {
     g2d_color(3, M2_RGB(31, 26, 4));      /* colorbase 3 = amber  */
     g2d_color(4, M2_RGB(18, 6, 28));      /* colorbase 4 = violet */
 
-    g2d_font_atlas();    /* upload the 8x8 font into texram0 ONCE (after g2d_init) */
+    m2_font_atlas();    /* upload the 8x8 font into texram0 ONCE (after g2d_init) */
 
     for (;;) {
         int bx = 40 + ((t >> 1) % 360);   /* a little motion */

@@ -14,7 +14,7 @@
 # has a working FPU) but are INVALID OPCODES on m2emulator. Turn this ON to compile
 # every float operation into a libgcc soft-float call instead (zero i960 hardware
 # FP) — required to run on m2emulator, a bit slower than native FP on MAME.
-option(M2_SOFTFLOAT "Soft-float: no i960 hardware FP (needed for m2emulator, which lacks the FPU)" OFF)
+option(M2_SOFTFLOAT "Soft-float: no i960 hardware FP (needed for m2emulator, which lacks the FPU)" ON)
 
 # m2sdk_softfloat(<target>) — apply the soft-float profile to <target>.
 #  * -msoft-float on compile AND link (selects the soft-float libgcc multilib).

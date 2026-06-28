@@ -90,6 +90,28 @@ static void geo_texparam_flat(u8 diffuse, u8 ambient) {
     for (i = 0; i < 0x20; i++) { geo__w(param); geo__w(geo__f(1.0f)); }
 }
 
+/* ---- direct-FIFO render-state helpers (shared by the m2_draw / m2_obj frame setups) ----
+ * These push the GEO command FIFO at 0x804000 IMMEDIATELY — unlike geo_window_fullscreen /
+ * geo_texparam_flat above, which BUFFER into the g_geo[] display list. Both per-frame setups
+ * emit the same window clip + a 0x20-entry TEXPARAM table + a 3-vector LIGHT; only the TEXPARAM
+ * material word and the light vector differ per path, so those are arguments. */
+static void m2_geo_fifo_window_full(void) {
+    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    *(volatile u32 *)0x00800030u = 0x00000303u;             /* set_window slot 0x30 */
+    *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;               /* start / end clip rect */
+    *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
+}
+static void m2_geo_fifo_texparam(u32 param) {               /* m2_draw: 0x10FF, m2_obj: 0x60FF */
+    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    int q; *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;
+    for (q = 0; q < 0x20; q++) { *fifo = param; *fifo = 0x3F800000u; }
+}
+static void m2_geo_fifo_light(u32 x, u32 y, u32 z) {        /* slot 0xA0 + 3 light-vector words */
+    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    *(volatile u32 *)0x008000A0u = 0x0000A0Au;
+    *fifo = x; *fifo = y; *fifo = z;
+}
+
 /* 12-float transform: 3x3 rotation (column-major triples) + translation [9..11]. */
 static void geo_matrix(const float m[12]) {
     int i; geo__w(GEO_OP_MATRIX); for (i = 0; i < 12; i++) geo__w(geo__f(m[i]));
@@ -123,16 +145,9 @@ static void geo_object_from_table(u32 n) {
 #define GEO_OP_TEXDATA  0x02000404u
 #define GEO_TEXRAM_BIT  0x00800000u
 
-/* Pure-C Newton sqrt. NOTE: do NOT route this through m2_cop_sqrt — COP_SQRT is
- * always "defined" (it's the opcode macro, not a feature flag), and depending on
- * the COP here hangs the render loop if the COP math FIFO doesn't answer. The COP
- * is only an accelerator; under soft-float the C path is correct and safe. */
-static float geo__sqrt(float x) {
-    float g; int i;
-    if (x <= 0.0f) return 0.0f;
-    g = x; for (i = 0; i < 8; i++) g = 0.5f * (g + x / g);
-    return g;
-}
+/* sqrt is shared: m2_sqrtf (m2.h). Kept off the COP deliberately — m2_cop_sqrt can
+ * hang the render loop if the COP math FIFO doesn't answer; the C path is correct
+ * under soft-float and needs no libm. */
 
 /* Write a colour header into texture-header RAM slot cb (th3=cb<<6, colorbase==cb).
  * Reference via tha = GEO_TEXRAM_BIT | (cb*4). Emit once per frame.
@@ -168,7 +183,7 @@ static void geo_quad(const float v0[3], const float v1[3],
 /* Thin-quad line from a to b, half-width w, widened perpendicular in the XY plane. */
 static void geo_line(const float a[3], const float b[3], float w, u32 cb) {
     float dx = b[0] - a[0], dy = b[1] - a[1];
-    float n = geo__sqrt(dx * dx + dy * dy);
+    float n = m2_sqrtf(dx * dx + dy * dy);
     float px, py, v0[3], v1[3], v2[3], v3[3];
     if (n < 0.0001f) { px = w; py = 0.0f; } else { px = -dy * w / n; py = dx * w / n; }
     v0[0]=a[0]+px; v0[1]=a[1]+py; v0[2]=a[2];
@@ -216,13 +231,13 @@ static void geo_obj_line(const float a[3], const float b[3], float w, u32 cb) {
     float mx = (a[0] + b[0]) * 0.5f, my = (a[1] + b[1]) * 0.5f, mz = (a[2] + b[2]) * 0.5f;
     /* width perp = dir x midpoint (screen-plane perpendicular to the line) */
     float px = dy * mz - dz * my, py = dz * mx - dx * mz, pz = dx * my - dy * mx;
-    float pn = geo__sqrt(px * px + py * py + pz * pz);
+    float pn = m2_sqrtf(px * px + py * py + pz * pz);
     float nx, ny, nz, nn, hw, m[12];
     if (pn < 1e-6f) { px = 1.0f; py = 0.0f; pz = 0.0f; pn = 1.0f; }  /* line on the view axis */
     hw = (w * 0.5f) / pn;
     px *= hw; py *= hw; pz *= hw;                       /* half-width vector */
     nx = dy * pz - dz * py; ny = dz * px - dx * pz; nz = dx * py - dy * px;  /* dir x perp */
-    nn = geo__sqrt(nx * nx + ny * ny + nz * nz);
+    nn = m2_sqrtf(nx * nx + ny * ny + nz * nz);
     if (nn < 1e-6f) nn = 1.0f;
     if (nx * mx + ny * my + nz * mz > 0.0f) nn = -nn;  /* orient the normal toward the camera */
     m[0] = dx / 12.0f; m[1] = dy / 12.0f; m[2] = dz / 12.0f;   /* col0: model +x -> half-line  */
@@ -259,7 +274,7 @@ static void geo_quad_matrix(const float v0[3], const float v1[3],
     ny = m[2]*m[6] - m[0]*m[8];
     nz = m[0]*m[7] - m[1]*m[6];
     if (nx*m[9] + ny*m[10] + nz*m[11] > 0.0f) { nx = -nx; ny = -ny; nz = -nz; }  /* inward (we see the rear/inner wall) */
-    nn = geo__sqrt(nx*nx + ny*ny + nz*nz);
+    nn = m2_sqrtf(nx*nx + ny*ny + nz*nz);
     if (nn < 1e-9f) nn = 1.0f;
     m[3] = nx/nn; m[4] = ny/nn; m[5] = nz/nn;
 }

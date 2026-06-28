@@ -93,12 +93,7 @@ static void g2d__color_header(u32 cb) {
     g2d__w(0u); g2d__w(0u); g2d__w(0u);
     g2d__w((cb & 0x3ffu) << 6);
 }
-static float g2d__sqrt(float x) {           /* Newton's method (no libm needed) */
-    float g; int i;
-    if (x <= 0.0f) return 0.0f;
-    g = x; for (i = 0; i < 6; i++) g = 0.5f * (g + x / g);
-    return g;
-}
+/* sqrt is shared: m2_sqrtf (m2.h) */
 
 /* ---- public API ---------------------------------------------------------- */
 
@@ -198,7 +193,7 @@ static void g2d_fill_circle(float cx, float cy, float r, u32 cb) { g2d_fill_elli
 /* thick line from (x0,y0) to (x1,y1), full width w */
 static void g2d_line(float x0, float y0, float x1, float y1, float w, u32 cb) {
     float dx = x1 - x0, dy = y1 - y0;
-    float n = g2d__sqrt(dx * dx + dy * dy), px, py;
+    float n = m2_sqrtf(dx * dx + dy * dy), px, py;
     if (n < 0.001f) { px = w * 0.5f; py = 0.0f; }
     else { px = -dy * (w * 0.5f) / n; py = dx * (w * 0.5f) / n; }
     g2d_quad(x0 + px, y0 + py, x1 + px, y1 + py, x1 - px, y1 - py, x0 - px, y0 - py, cb);
@@ -245,14 +240,7 @@ static void g2d_text(float x, float y, const char *s, u32 cb) { g2d_text_scaled(
  * (15) is TRANSPARENT. (See memory/model2-texture-format.) */
 #define G2D_TEXRAM0 ((volatile u32 *)0x11000000u)
 
-/* set 4-bit texel (val) at (x,y) in texram0 sheet (inverse of get_texel) */
-static void g2d_texel(int x, int y, u8 val) {
-    u32 offset = (u32)((y / 2) * 512 + (x / 2));
-    u32 widx = offset >> 1;
-    int shift = ((x & 1) ? 0 : 4) + ((y & 1) ? 0 : 8) + ((offset & 1) ? 16 : 0);
-    u32 w = G2D_TEXRAM0[widx];
-    G2D_TEXRAM0[widx] = (w & ~(0xFu << shift)) | ((u32)(val & 0xf) << shift);
-}
+/* texel write is shared: m2_texram0_texel (m2font.h) */
 
 /* write a 4-word texture header into GEO texture_ram at hdr (cmd 0x04). */
 static void g2d_tex_header(u32 hdr, int texx, int texy, int wbits, int hbits,
@@ -327,33 +315,11 @@ static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
 #define G2D_FONT_HDR  0x100u    /* texture_ram slot: atlas header (4 words)   */
 #define G2D_FONT_UV   0x108u    /* texture_ram slot: per-glyph UVs (8 words)  */
 
-/* Upload gFont -> texram0 atlas. Call ONCE after g2d_init (writes texels via the
- * CPU, not the display list). Stroke pixels (font nibble == 1) -> bright texel 14;
- * everything else (fill/shadow nibble 2, or empty 0) -> texel 0xf (transparent in
- * the translucent renderer). Columns are de-scrambled per the comment below. */
-static void g2d_font_atlas(void) {
-    int c, gy, gx;
-    for (c = 0; c < 128; c++) {
-        const u8 *g = gFont + (u32)c * 32;
-        int ax = (c & 15) * 8, ay = (c >> 4) * 8;
-        for (gy = 0; gy < 8; gy++)
-            for (gx = 0; gx < 8; gx++) {
-                u8 v = g[gy * 4 + (gx >> 1)];
-                int ink = (gx & 1) ? (v >> 4) : (v & 0x0f);
-                /* gFont is two-layer: nibble 1 = letter strokes, 2 = fill/shadow.
-                 * Use only the strokes (value 1) so counters stay open and glyphs
-                 * read cleanly; value 2 alone would fill letters into blobs.
-                 * gFont packs each row's columns as two 4-px halves, right-half
-                 * first AND each half reversed, relative to screen order. Undo with
-                 * a horizontal half-swap then a flip: dst col = 7 - ((gx+4)&7).
-                 * Verified against the source in tools/fontdump.py (swapx+flipx). */
-                g2d_texel(ax + (7 - ((gx + 4) & 7)), ay + gy, (u8)(ink == 1 ? 14 : 0x0f));
-            }
-    }
-}
+/* The atlas upload is shared: m2_font_atlas() (m2font.h). Call it ONCE after
+ * g2d_init() (it writes texels via the CPU, not the display list). */
 
 /* Draw text with the textured font atlas. cb = colorbase hue; each glyph is
- * 8*scale px wide. Call between g2d_begin()/g2d_end(); run g2d_font_atlas() once
+ * 8*scale px wide. Call between g2d_begin()/g2d_end(); run m2_font_atlas() once
  * beforehand. Glyphs reuse one UV slot, rewritten before each quad (the GEO
  * captures the UVs into each polygon as it parses the list, in order). */
 static void g2d_ttext_scaled(float x, float y, const char *s, u32 cb, float scale) {
@@ -424,7 +390,7 @@ static void g2d_vquad(const float v0[3], const float v1[3],
    plane; each end keeps its real Z. */
 static void g2d_vline(const float a[3], const float b[3], float w, u32 cb) {
     float dx = b[0]-a[0], dy = b[1]-a[1];
-    float n = g2d__sqrt(dx*dx + dy*dy), hw = w * 0.5f, px, py;
+    float n = m2_sqrtf(dx*dx + dy*dy), hw = w * 0.5f, px, py;
     float v0[3], v1[3], v2[3], v3[3];
     if (n < 0.0001f) { px = hw; py = 0.0f; } else { px = -dy*hw/n; py = dx*hw/n; }
     v0[0]=a[0]+px; v0[1]=a[1]+py; v0[2]=a[2];
@@ -453,7 +419,7 @@ static void g2d_v3(float out[3], float focal, float x, float y, float z) {
    (nx,ny,nz) the (unnormalized) face normal and (lx,ly,lz) the light direction.
    Lets flat panels read as shaded 3D (e.g. Tempest's tube wall). */
 static u32 g2d_luma(float nx, float ny, float nz, float lx, float ly, float lz) {
-    float nn = g2d__sqrt(nx*nx + ny*ny + nz*nz);
+    float nn = m2_sqrtf(nx*nx + ny*ny + nz*nz);
     float nd = nn > 1e-6f ? (nx*lx + ny*ly + nz*lz) / nn : 0.0f;
     if (nd < 0.0f) nd = -nd;
     if (nd > 1.0f) nd = 1.0f;

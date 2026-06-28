@@ -40,35 +40,7 @@ static u32 m2__next_slot(void) { u32 s = 0x100u + (m2__tex_slot * 0x10u); m2__te
 /* per-glyph advance, in model-456 widths * scale (tweak for tighter/looser spacing). */
 static float m2_text_advance = 12.5f;
 
-static int m2__font_loaded = 0;
-
-/* set one 4-bit texel (val) at (x,y) in texram0 (sheet 0) — the 2x2-swizzled 4bpp layout. */
-static void m2__font_texel(int x, int y, u8 val) {
-    volatile u32 *T0 = (volatile u32 *)0x11000000u;
-    u32 offset = (u32)((y / 2) * 512 + (x / 2));
-    u32 widx = offset >> 1;
-    int shift = ((x & 1) ? 0 : 4) + ((y & 1) ? 0 : 8) + ((offset & 1) ? 16 : 0);
-    u32 w = T0[widx];
-    T0[widx] = (w & ~(0xFu << shift)) | ((u32)(val & 0xf) << shift);
-}
-
-/* Upload gFont -> texram0 as a 128x64 atlas (16x8 glyph grid). Stroke nibble (1) -> texel 14 (ink);
- * everything else -> 0xf (transparent in the translucent renderer). Idempotent (loads once). */
-static void m2_font_atlas(void) {
-    int c, gy, gx;
-    if (m2__font_loaded) return;
-    for (c = 0; c < 128; c++) {
-        const unsigned char *g = gFont + (u32)c * 32;
-        int axb = (c & 15) * 8, ayb = (c >> 4) * 8;
-        for (gy = 0; gy < 8; gy++)
-            for (gx = 0; gx < 8; gx++) {
-                unsigned char v = g[gy * 4 + (gx >> 1)];
-                int ink = (gx & 1) ? (v >> 4) : (v & 0x0f);
-                m2__font_texel(axb + (7 - ((gx + 4) & 7)), ayb + gy, (u8)(ink == 1 ? 14 : 0x0f));
-            }
-    }
-    m2__font_loaded = 1;
-}
+/* m2_texram0_texel + m2_font_atlas are shared (m2font.h). */
 
 /* Draw ONE glyph c (ASCII) at world (wx,wy,wz), uniform scale, ink colorbase cb. The glyph is a
  * textured+translucent quad: model 456 instanced via the COP (ang_x=90 flips it from the XZ plane to

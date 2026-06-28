@@ -4,7 +4,7 @@
  *   https://github.com/stevej0/DaytonaTestRom
  *
  * Two-layer 4bpp glyphs: nibble value 1 = letter strokes, value 2 = fill/shadow.
- * (m2_gfx2d.h's g2d_font_atlas() inks value 1 for clean glyphs.)
+ * (m2_font_atlas() below inks value 1 for clean glyphs.)
  */
 #ifndef M2FONT_H
 #define M2FONT_H
@@ -1028,6 +1028,46 @@ static const unsigned char gFont[] =
 	0x11,0x02,0x20,0x12,
 	0x22,0x00,0x00,0x22,
 };
+
+/* ---- shared texram0 helpers (one canonical copy; the render paths reuse these) ----
+ * texram0 is 2x2-swizzled 4bpp (see memory/model2-texture-format). These were
+ * previously copy-pasted as g2d_texel / m2__font_texel / m2__obj_texel and
+ * g2d_font_atlas / m2_font_atlas; collapsed here so every path shares one impl. */
+
+/* set one 4-bit texel (val) at (x,y) in texram0 sheet 0 */
+static void m2_texram0_texel(int x, int y, u8 val) {
+    volatile u32 *T0 = (volatile u32 *)0x11000000u;
+    u32 offset = (u32)((y / 2) * 512 + (x / 2));
+    u32 widx   = offset >> 1;
+    int shift  = ((x & 1) ? 0 : 4) + ((y & 1) ? 0 : 8) + ((offset & 1) ? 16 : 0);
+    u32 w = T0[widx];
+    T0[widx] = (w & ~(0xFu << shift)) | ((u32)(val & 0xf) << shift);
+}
+
+static int m2__font_loaded = 0;
+
+/* Upload gFont -> texram0 as a 128x64 atlas (16x8 glyph grid). Stroke nibble (1) ->
+ * texel 14 (ink); everything else (fill/shadow nibble 2, or empty) -> 0xf (transparent
+ * in the translucent renderer). Idempotent. Call ONCE after the colour pipeline is up.
+ *   gFont packs each row's columns as two 4-px halves, right-half first AND each half
+ *   reversed vs screen order; undo with a half-swap + flip: dst col = 7 - ((gx+4)&7).
+ *   Verified against the source in tools/fontdump.py (swapx+flipx). */
+static void m2_font_atlas(void) {
+    int c, gy, gx;
+    if (m2__font_loaded) return;
+    for (c = 0; c < 128; c++) {
+        const u8 *g = gFont + (u32)c * 32;
+        int ax = (c & 15) * 8, ay = (c >> 4) * 8;
+        for (gy = 0; gy < 8; gy++)
+            for (gx = 0; gx < 8; gx++) {
+                u8 v = g[gy * 4 + (gx >> 1)];
+                int ink = (gx & 1) ? (v >> 4) : (v & 0x0f);
+                m2_texram0_texel(ax + (7 - ((gx + 4) & 7)), ay + gy,
+                                 (u8)(ink == 1 ? 14 : 0x0f));
+            }
+    }
+    m2__font_loaded = 1;
+}
 
 #endif /* M2FONT_H */
 
