@@ -103,16 +103,7 @@ static void m2_obj_frame_setup(void) {
     m2_geo_fifo_window_full();                                   /* WINDOW + clip   */
     m2_geo_fifo_texparam(0x000060FFu);                           /* TEXPARAM table  */
     *fifo = 0x0B001616u; *fifo = 0x45200000u;                    /* OP_LOD base mip 2560.0 */
-    { u32 k = 0u;
-      while (k < COP_PREAMBLE_N) {
-          u32 w  = cop_obj_preamble[k++];
-          u32 op = w / 0x800101u;
-          u32 nin = (op == 0x2Bu || op == 0x2Fu) ? 4u : (op == 0x2Du) ? 2u : 1u;
-          u32 j;
-          *cf = w;
-          for (j = 0u; j < nin; j++) *cf = cop_obj_preamble[k++];
-          cop_drain(cf, 1u);
-      } }
+    cop_emit_obj_preamble(cf);                                   /* STF projection+basis preamble */
 }
 
 /* ---- per-OBJECT submit (after m2_obj_frame_setup; threads multiple objects via g_cop_p) ----------
