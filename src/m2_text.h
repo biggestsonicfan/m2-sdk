@@ -54,27 +54,23 @@ static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32
     u32 hdr[4];
     u32 hslot = m2__next_slot(), uslot = hslot + 8u;   /* per-glyph header+UV slot (per-poly colour) */
     m2_font_atlas();
-    /* GEO frame slots */
+    /* per-frame GEO render-state prelude — the same window/light/texparam the m2_draw and
+     * m2_obj frame setups emit (shared helpers in m2_geo.h). */
     *(volatile u32 *)ZCLIP_REG = 0xFFu;
     m2_cam_geo_proj();
-    m2_geo_cmd(0x0A0u);
-    *fifo = 0x00000000u; *fifo = 0x00000000u; *fifo = 0x3F800000u;
-    m2_geo_cmd(0x030u);
-    *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;
-    *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
-    /* TEXPARAM table (0x20 entries): the per-poly luma model — ambient 0x60 | diffuse 0xFF, 1.0. WITHOUT
-     * this the cpres2 computes object.luma=0 and the ink renders BLACK regardless of colorbase/palette
-     * (luma = lumaram[...] * object.luma / 256). Ambient 0x60 = a bright floor so the ink takes its colour. */
-    { int q; *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;
-      for (q = 0; q < 0x20; q++) { *fifo = 0x000060FFu; *fifo = 0x3F800000u; } }
-    m2_geo_cmd(0x160u);
+    m2_geo_fifo_light(0u, 0u, geo__f(1.0f));        /* light = +Z (z = 1.0) */
+    m2_geo_fifo_window_full();
+    /* TEXPARAM ambient 0x60 | diffuse 0xFF: WITHOUT it cpres2 computes object.luma=0 and the ink
+     * renders BLACK regardless of colorbase (luma = lumaram[...] * object.luma / 256). */
+    m2_geo_fifo_texparam(0x000060FFu);
+    m2_geo_cmd(0x160u);                             /* LOD */
     m2_geo_pf(5.33333f * m2_cam.focus);
     /* font-atlas texture header (th0: textured bit14 + translucent bit13; 128x64; sheet0; cb) */
-    *fifo = 0x02000404u; *fifo = 0x00800000u | hslot; *fifo = 4u;
+    *fifo = GEO_OP_TEXDATA; *fifo = GEO_TEXRAM_BIT | hslot; *fifo = 4u;
     *fifo = 0x0000600Au; *fifo = 0u; *fifo = 0u; *fifo = (cb & 0x3ffu) << 6;
     /* per-glyph UV: 4 verts (V,U) TL,TR,BR,BL, scaled <<3. Both axes flipped vs naive mapping to cancel
      * model 456's vert winding + the ang_x=90 flip -> upright, un-mirrored. */
-    *fifo = 0x02000404u; *fifo = 0x00800000u | uslot; *fifo = 8u;
+    *fifo = GEO_OP_TEXDATA; *fifo = GEO_TEXRAM_BIT | uslot; *fifo = 8u;
     *fifo = ((ay + 8u) << 3); *fifo = ((ax + 8u) << 3);
     *fifo = ((ay + 8u) << 3); *fifo = (ax << 3);
     *fifo = (ay << 3);        *fifo = (ax << 3);
@@ -83,24 +79,24 @@ static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32
     { float w[3], v[3];
       w[0] = wx; w[1] = wy; w[2] = wz;
       m2_cam_world_to_view(w, v);
-      *cf = 0x00800101u;                              /* OBJECT push */
-      *cf = 0x01800303u;                              /* set_identity */
-      *cf = 0x03000606u;                              /* set_pos */
+      *cf = COP_PUSH;                                 /* OBJECT push */
+      *cf = COP_IDENTITY;                             /* set_identity */
+      *cf = COP_SET_POS;
       m2_cop_pf(v[0]); m2_cop_pf(v[1]); m2_cop_pf(v[2]);
-      *cf = 0x04800909u; *cf = 0u;                    /* ang_y = 0 */
-      *cf = 0x04000808u; *cf = 0x4000u;               /* ang_x = 90deg: flip XZ-plane quad to face camera */
-      *cf = 0x05000A0Au; *cf = 0u;                    /* ang_z = 0 */
-      *cf = 0x03800707u;                              /* SCALE */
+      *cf = COP_ANG_Y; *cf = 0u;                      /* ang_y = 0 */
+      *cf = COP_ANG_X; *cf = 0x4000u;                 /* ang_x = 90deg: flip XZ-plane quad to face camera */
+      *cf = COP_ANG_Z; *cf = 0u;                      /* ang_z = 0 */
+      *cf = COP_SCALE;
       *cf = sc.u; *cf = sc.u; *cf = sc.u;
       /* poly counts reset once per frame (m2_frame_begin), NOT per submit, so objects thread */
-      hdr[0] = 0x00800000u | uslot;         /* tpa = glyph UV   */
-      hdr[1] = 0x00800000u | hslot;        /* tha = atlas hdr  */
+      hdr[0] = GEO_TEXRAM_BIT | uslot;                /* tpa = glyph UV   */
+      hdr[1] = GEO_TEXRAM_BIT | hslot;                /* tha = atlas hdr  */
       hdr[2] = g_flatquad;                            /* oba = model 456  */
       hdr[3] = 0x200u;                                /* obc bound        */
       cop_submit_object(cf, hdr);
-      *cf = 0x01000202u;                              /* DIRECT flush */
+      *cf = GEO_OP_DIRECT;                            /* DIRECT flush */
       { u32 ep = *(volatile u32 *)0x00802008u;
-        *(volatile u32 *)(0x00900000u + (ep & 0x0001FFFCu)) = 0x07800F0Fu; } }
+        *(volatile u32 *)(0x00900000u + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
 }
 
 /* Draw a NUL-terminated string from world (wx,wy,wz): one glyph per char, advancing world-x by
