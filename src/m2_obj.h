@@ -85,8 +85,8 @@ static void m2_obj_fill_patch(void) {
  * patch. Reference it from a submit via tha = 0x00800000 | (cb*4). Emit before the quad that uses it. */
 static void m2_obj_color_header(u32 cb) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    *fifo = 0x02000404u;                        /* TEXDATA op */
-    *fifo = 0x00800000u | (cb * 4u);            /* dest = texram header slot cb*4 */
+    *fifo = GEO_OP_TEXDATA;
+    *fifo = GEO_TEXRAM_BIT | (cb * 4u);         /* dest = texram header slot cb*4 */
     *fifo = 4u;                                 /* 4 header words */
     *fifo = 0x4012u; *fifo = 0u; *fifo = (u32)M2_OBJ_PATCH_TH2;  /* th0=textured128, th1=0, th2=patch */
     *fifo = (cb & 0x3ffu) << 6;                 /* th3 = colorbase */
@@ -102,7 +102,7 @@ static void m2_obj_frame_setup(void) {
     m2_geo_fifo_light(0x3F3504EDu, 0xBF2F9844u, 0x3E2FEF42u);    /* slot 0xA0 LIGHT */
     m2_geo_fifo_window_full();                                   /* WINDOW + clip   */
     m2_geo_fifo_texparam(0x000060FFu);                           /* TEXPARAM table  */
-    *fifo = 0x0B001616u; *fifo = 0x45200000u;                    /* OP_LOD base mip 2560.0 */
+    *fifo = GEO_OP_LOD; *fifo = geo__f(2560.0f);                 /* base mip 2560.0 */
     cop_emit_obj_preamble(cf);                                   /* STF projection+basis preamble */
 }
 
@@ -115,22 +115,22 @@ static void m2_obj_submit(u32 model_no, u32 tha_override, u32 px, u32 py, u32 pz
     volatile u32 *cf = (volatile u32 *)0x00884000u;
     volatile const u32 *hdr = (volatile const u32 *)(M2_MODEL_TABLE + model_no * 16u);
     u32 tha = tha_override ? tha_override : hdr[1];
-    *cf = 0x01800303u;                                           /* set_identity */
-    *cf = 0x03000606u; *cf = px; *cf = py; *cf = pz;             /* set_pos */
-    *cf = 0x04800909u; *cf = ay;                                 /* ang_y */
-    *cf = 0x04000808u; *cf = ax;                                 /* ang_x */
-    *cf = 0x05000A0Au; *cf = az;                                 /* ang_z */
-    *cf = 0x03800707u; *cf = sxb; *cf = syb; *cf = szb;          /* SCALE (per axis) */
-    *cf = 0x09801313u; *cf = 0x09801313u; *cf = 0x09801313u;     /* fence: fadd x3 */
+    *cf = COP_IDENTITY;                                          /* set_identity */
+    *cf = COP_SET_POS; *cf = px; *cf = py; *cf = pz;             /* set_pos */
+    *cf = COP_ANG_Y; *cf = ay;
+    *cf = COP_ANG_X; *cf = ax;
+    *cf = COP_ANG_Z; *cf = az;
+    *cf = COP_SCALE; *cf = sxb; *cf = syb; *cf = szb;            /* per-axis scale */
+    *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;              /* fadd x3 fence */
     cop_drain(cf, 1u);
     { u32 wr = *(volatile u32 *)0x00802008u;                     /* COP_WPOS */
       *(volatile u32 *)0x00801008u = wr + 0x48u;                 /* GEO_WRITE = COP_WPOS + 0x48 */
-      *cf = 0x3C007878u; *cf = wr; *cf = 0u;                     /* SUBMIT(0x78) */
+      *cf = COP_SUBMIT; *cf = wr; *cf = 0u;                      /* polygon_submit (op 0x78) */
       *cf = hdr[0]; *cf = tha; *cf = hdr[2]; *cf = hdr[3];       /* tpa / tha(maybe override) / oba / obc */
       *cf = g_cop_p2; *cf = g_cop_p;                             /* P2_POLYGON, POLYGON (running) */
       g_cop_p2 = *cf; g_cop_p = *cf;                             /* read back + save */
       { u32 ep = *(volatile u32 *)0x00802008u;                   /* GEO END mark */
-        *(volatile u32 *)(0x00900000u + (ep & 0x0001FFFCu)) = 0x07800F0Fu; } }
+        *(volatile u32 *)(0x00900000u + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
 }
 
 /* Convenience: one flat-colour quad (model 456) of colorbase cb (colour = palram[cb+0x1000]). Writes
@@ -140,7 +140,7 @@ static void m2_solid_quad(u32 cb, u32 px, u32 py, u32 pz, u32 ax, u32 ay, u32 az
                           u32 sxb, u32 syb, u32 szb) {
     m2_obj_fill_patch();
     m2_obj_color_header(cb);
-    m2_obj_submit(M2_FLAT_QUAD_MODEL, 0x00800000u | (cb * 4u), px, py, pz, ax, ay, az, sxb, syb, szb);
+    m2_obj_submit(M2_FLAT_QUAD_MODEL, GEO_TEXRAM_BIT | (cb * 4u), px, py, pz, ax, ay, az, sxb, syb, szb);
 }
 
 #endif /* M2_OBJ_H */

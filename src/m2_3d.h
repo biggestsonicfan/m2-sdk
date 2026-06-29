@@ -189,6 +189,7 @@ static float m2_cop_gf(void)    { union { float f; u32 u; } x; x.u = M2_COPFIFO;
 #define COP_RMATRIX   COP_CMD(0x05)  /* out: 12 floats (row-major 3x4) bone -> FIFO  */
 #define COP_SET_POS   COP_CMD(0x06)  /* in: x,y,z; T += rot*(x,y,z)                  */
 #define COP_SCALE     COP_CMD(0x07)  /* in: sx,sy,sz; rot[col][row] *= s per col     */
+#define COP_SUBMIT    COP_CMD(0x78)  /* polygon_submit: commit the transformed object */
 
 #define M2_ANG_SCALE  10430.378f    /* radians -> i16 angle (65536 / 2pi)      */
 static u32 m2_ang(float radians) { return (u32)((int)(radians * M2_ANG_SCALE)) & 0xffffu; }
@@ -242,9 +243,9 @@ static u32 g_cop_p2, g_cop_p;
 static void cop_drain(volatile u32 *cf, u32 n) { volatile u32 d = 0u; while (n-- > 0u) d = *cf; (void)d; }
 static void cop_submit_object(volatile u32 *cf, const volatile u32 *hdr) {
     u32 wr; volatile u32 s, p2, p;
-    *cf = 0x09801313u; *cf = 0x09801313u; *cf = 0x09801313u;  /* COP_CMD(0x13) x3 fence */
+    *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;           /* fadd x3 fence */
     s = *cf;                                                  /* 1 sync read */
-    *cf = 0x3C007878u;                                        /* SUBMIT op 0x78 */
+    *cf = COP_SUBMIT;                                         /* polygon_submit (op 0x78) */
     wr = *(volatile u32 *)0x00802008u;                        /* COP_WPOS */
     *(volatile u32 *)0x00801008u = wr + 0x48u;                /* GEO_WRITE = COP_WPOS + 0x48 (reserve) */
     *cf = wr; *cf = 0u;
