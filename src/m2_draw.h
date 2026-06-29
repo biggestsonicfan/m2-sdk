@@ -82,8 +82,8 @@ static void m2_set_luma(u32 l) { m2_draw_luma = l & 0xFFu; }
  * app_directtest, proven to reach the rasterizer. */
 static void m2_draw_frame_setup(void) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    m2_geo_cmd(0x080u); *fifo = 0x40800000u;                       /* ZSORT     */
-    m2_geo_cmd(0x090u); *fifo = 0x438C0000u; *fifo = 0x438C0000u;  /* FOCAL 280 */
+    m2_geo_cmd(0x080u); *fifo = m2__fb(4.0f);                        /* ZSORT granularity (coarse) */
+    m2_geo_cmd(0x090u); *fifo = m2__fb(280.0f); *fifo = m2__fb(280.0f); /* FOCAL distance */
     m2_geo_fifo_light(0x3F34CA6Eu, 0xBF3167ABu, 0x3E147F30u);
     m2_geo_fifo_window_full();
     m2_geo_fifo_texparam(0x000010FFu);
@@ -92,19 +92,19 @@ static void m2_draw_frame_setup(void) {
 /* flat-colour DIRECT quad over screen rect (x,y,w,h), colorbase cb, depth pz. */
 static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    u32 tha = 0x00800000u | (cb * 4u), zf = m2__fb(pz);
+    u32 tha = GEO_TEXRAM_BIT | (cb * 4u), zf = m2__fb(pz);
     float l = (x - 248.0f) * pz,  r = ((x + w) - 248.0f) * pz;
     float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
     /* render state is emitted ONCE per frame by m2_draw_frame_setup(); here just the header + quad */
     /* flat colorbase header at THIS cb's own tha slot (cb*4) */
-    *fifo = 0x02000404u; *fifo = tha; *fifo = 4u;
+    *fifo = GEO_OP_TEXDATA; *fifo = tha; *fifo = 4u;
     *fifo = 0u; *fifo = 0u; *fifo = 0u; *fifo = (cb & 0x3ffu) << 6;
     /* the DIRECT quad: TR, TL, [polyHdr, luma, dist], BR, BL, sentinel */
-    *fifo = 0x01000202u;
+    *fifo = GEO_OP_DIRECT;
     *fifo = 0u; *fifo = tha;
     *fifo = m2__fb(r); *fifo = m2__fb(t); *fifo = zf;
     *fifo = m2__fb(l); *fifo = m2__fb(t); *fifo = zf;
-    *fifo = 0x00020101u; *fifo = (m2_draw_luma << 23); *fifo = 0u;
+    *fifo = GEO_POLY_QUAD; *fifo = (m2_draw_luma << 23); *fifo = 0u;
     *fifo = m2__fb(r); *fifo = m2__fb(b); *fifo = zf;
     *fifo = m2__fb(l); *fifo = m2__fb(b); *fifo = zf;
     *fifo = 0u; *fifo = 0u;
@@ -118,7 +118,7 @@ static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz)
 static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float pz, u32 th0,
                                u32 texx, u32 texy, u32 u0, u32 v0, u32 uw, u32 vh) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    u32 tha = 0x00800000u | (cb * 4u), zf = m2__fb(pz);
+    u32 tha = GEO_TEXRAM_BIT | (cb * 4u), zf = m2__fb(pz);
     u32 th2 = ((texx / 32u) & 0x3fu) | (((texy / 32u) & 0x1fu) << 6);
     u32 uvoff = 0x40u;
     u32 pu0 = u0 << 3, pv0 = v0 << 3, pu1 = (u0 + uw) << 3, pv1 = (v0 + vh) << 3;
@@ -126,9 +126,9 @@ static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float
     float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
     /* render state is emitted ONCE per frame by m2_draw_frame_setup() */
     /* texture header (cb's slot) + per-vert UVs (v0 TL, v1 TR, v2 BR, v3 BL) */
-    *fifo = 0x02000404u; *fifo = tha; *fifo = 4u;
+    *fifo = GEO_OP_TEXDATA; *fifo = tha; *fifo = 4u;
     *fifo = th0; *fifo = 0u; *fifo = th2; *fifo = (cb & 0x3ffu) << 6;
-    *fifo = 0x02000404u; *fifo = 0x00800000u | uvoff; *fifo = 8u;   /* texture_ram select bit (as header) */
+    *fifo = GEO_OP_TEXDATA; *fifo = GEO_TEXRAM_BIT | uvoff; *fifo = 8u;   /* texture_ram select bit (as header) */
     *fifo = pv0; *fifo = pu0;   /* v0 TL */
     *fifo = pv0; *fifo = pu1;   /* v1 TR */
     *fifo = pv1; *fifo = pu1;   /* v2 BR */
@@ -141,11 +141,11 @@ static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float
      * atlas renders as SOLID BLOCKS in MAME (verified) — every glyph collapses to a filled cell. So keep
      * the natural mip. Our pz is a 2D LAYER not a real depth, so the GEO's z-based auto-mip can't pick by
      * glyph SIZE — small-text mip selection is done MANUALLY (see m2_text.h / m2_draw_glyph_px). */
-    *fifo = 0x01000202u;
-    *fifo = 0x00800000u | uvoff; *fifo = tha;
+    *fifo = GEO_OP_DIRECT;
+    *fifo = GEO_TEXRAM_BIT | uvoff; *fifo = tha;
     *fifo = m2__fb(r); *fifo = m2__fb(t); *fifo = zf;
     *fifo = m2__fb(l); *fifo = m2__fb(t); *fifo = zf;
-    *fifo = 0x00020101u; *fifo = (m2_draw_luma << 23); *fifo = 0x3F800000u;
+    *fifo = GEO_POLY_QUAD; *fifo = (m2_draw_luma << 23); *fifo = m2__fb(1.0f);  /* dist = texlod 0 (natural mip) */
     *fifo = m2__fb(r); *fifo = m2__fb(b); *fifo = zf;
     *fifo = m2__fb(l); *fifo = m2__fb(b); *fifo = zf;
     *fifo = 0u; *fifo = 0u;

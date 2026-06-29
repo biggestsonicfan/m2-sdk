@@ -144,6 +144,8 @@ static void geo_object_from_table(u32 n) {
 #define GEO_OP_DIRECT   0x01000202u
 #define GEO_OP_TEXDATA  0x02000404u
 #define GEO_TEXRAM_BIT  0x00800000u
+/* direct_data polygon attribute word: quad | linktype 1 | doubleside (== 0x00020101). */
+#define GEO_POLY_QUAD   (1u | (1u << 8) | (1u << 17))
 
 /* sqrt is shared: m2_sqrtf (m2.h). Kept off the COP deliberately — m2_cop_sqrt can
  * hang the render loop if the COP math FIFO doesn't answer; the C path is correct
