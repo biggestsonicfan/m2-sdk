@@ -57,9 +57,9 @@ static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32
     /* GEO frame slots */
     *(volatile u32 *)ZCLIP_REG = 0xFFu;
     m2_cam_geo_proj();
-    *(volatile u32 *)0x008000A0u = 0xA0Au;
+    m2_geo_cmd(0x0A0u);
     *fifo = 0x00000000u; *fifo = 0x00000000u; *fifo = 0x3F800000u;
-    *(volatile u32 *)0x00800030u = 0x303u;
+    m2_geo_cmd(0x030u);
     *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;
     *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
     /* TEXPARAM table (0x20 entries): the per-poly luma model — ambient 0x60 | diffuse 0xFF, 1.0. WITHOUT
@@ -67,7 +67,7 @@ static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32
      * (luma = lumaram[...] * object.luma / 256). Ambient 0x60 = a bright floor so the ink takes its colour. */
     { int q; *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;
       for (q = 0; q < 0x20; q++) { *fifo = 0x000060FFu; *fifo = 0x3F800000u; } }
-    *(volatile u32 *)0x00800160u = 0x1616u;
+    m2_geo_cmd(0x160u);
     m2_geo_pf(5.33333f * m2_cam.focus);
     /* font-atlas texture header (th0: textured bit14 + translucent bit13; 128x64; sheet0; cb) */
     *fifo = 0x02000404u; *fifo = 0x00800000u | hslot; *fifo = 4u;

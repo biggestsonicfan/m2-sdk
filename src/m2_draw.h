@@ -82,8 +82,8 @@ static void m2_set_luma(u32 l) { m2_draw_luma = l & 0xFFu; }
  * app_directtest, proven to reach the rasterizer. */
 static void m2_draw_frame_setup(void) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    *(volatile u32 *)0x00800080u = 0x808u; *fifo = 0x40800000u;                       /* ZSORT     */
-    *(volatile u32 *)0x00800090u = 0x909u; *fifo = 0x438C0000u; *fifo = 0x438C0000u;  /* FOCAL 280 */
+    m2_geo_cmd(0x080u); *fifo = 0x40800000u;                       /* ZSORT     */
+    m2_geo_cmd(0x090u); *fifo = 0x438C0000u; *fifo = 0x438C0000u;  /* FOCAL 280 */
     m2_geo_fifo_light(0x3F34CA6Eu, 0xBF3167ABu, 0x3E147F30u);
     m2_geo_fifo_window_full();
     m2_geo_fifo_texparam(0x000010FFu);

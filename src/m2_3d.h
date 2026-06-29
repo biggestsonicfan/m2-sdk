@@ -329,10 +329,16 @@ static void m2_cam_world_to_view(const float p[3], float out[3]) {
 #define M2_GEOFIFO      (*(volatile u32 *)0x00804000u)
 static void m2_geo_pf(float f) { union { float f; u32 u; } x; x.f = f; M2_GEOFIFO = x.u; }
 
+/* Emit a GEO slot-register command header. The slot's command word is (slot>>4)*0x101
+ * (slot 0x80 -> 0x808, 0x30 -> 0x303, 0x100 -> 0x1010, ...); any operands follow on the
+ * FIFO. NB this is the command form only — writing a non-encoding value to a slot (e.g.
+ * M2_GEO_END = buffer offset) is a data write, not a command, and stays explicit. */
+static void m2_geo_cmd(u32 slot) { M2_GEO_SLOT(slot) = ((slot >> 4) & 0xFFu) * 0x101u; }
+
 /* Per-frame GEO projection feed (camera_init :30836): FOCAL setup slot 0x90 = 0x909, then
  * the focal_x / focal_y pair. Call once per frame before submitting objects. */
 static void m2_cam_geo_proj(void) {
-    M2_GEO_SLOT(0x90) = 0x909u;
+    m2_geo_cmd(0x90u);
     m2_geo_pf(m2_cam.focus);
     m2_geo_pf(m2_cam.focus);
 }

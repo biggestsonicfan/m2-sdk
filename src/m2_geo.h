@@ -97,7 +97,7 @@ static void geo_texparam_flat(u8 diffuse, u8 ambient) {
  * material word and the light vector differ per path, so those are arguments. */
 static void m2_geo_fifo_window_full(void) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    *(volatile u32 *)0x00800030u = 0x00000303u;             /* set_window slot 0x30 */
+    m2_geo_cmd(0x030u);             /* set_window slot 0x30 */
     *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;               /* start / end clip rect */
     *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
 }
@@ -108,7 +108,7 @@ static void m2_geo_fifo_texparam(u32 param) {               /* m2_draw: 0x10FF, 
 }
 static void m2_geo_fifo_light(u32 x, u32 y, u32 z) {        /* slot 0xA0 + 3 light-vector words */
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    *(volatile u32 *)0x008000A0u = 0x0000A0Au;
+    m2_geo_cmd(0x0A0u);
     *fifo = x; *fifo = y; *fifo = z;
 }
 
@@ -383,7 +383,7 @@ static void geo_initialize(void) {
         buf = GEO_BUFFERRAM + geo_buf_off[r9];
         *(volatile u32 *)GEO_WRITE_REG = buf;             /* GEO_WRITE = this buffer        */
         g10[0] = 0u; g10[0] = 0u; g10[0] = 0u;            /* slot 0x0 x3 (empty list head)  */
-        *(volatile u32 *)0x008000F0u = 0x00000F0Fu;       /* slot 0xF0 = end-mark command   */
+        m2_geo_cmd(0x0F0u);       /* slot 0xF0 = end-mark command   */
     }
     buf = GEO_BUFFERRAM + geo_buf_off[3];                 /* buffer 3                       */
     *(volatile u32 *)0x00501004u = buf;                   /* BUFF_ADD = buffer 3            */
@@ -442,7 +442,7 @@ static void geo_interrupt_wait(void) {
  * next buffer (g10+0x1008). (BUFF_MAX usage tracking omitted - pure diagnostic.) */
 static void geo_set_end_mark(void) {
     u32 prev = BUFF_ADD;
-    *(volatile u32 *)0x008000F0u = 0x00000F0Fu;
+    m2_geo_cmd(0x0F0u);
     *(volatile u32 *)0x00803008u = prev;
     buffIndex = (u8)((buffIndex + 1u) & 3u);
     BUFF_ADD  = geo_buff_ram_adds[buffIndex];
@@ -471,13 +471,13 @@ static void geo_set_end_mark(void) {
 /* STF set_mmode (event_loop @0x113B0 pushes set_mmode(3) then set_mmode(1) at the top of every frame):
  * slot 0x70 = 0x707, then push the mode word to the GEO FIFO. */
 static void m2_geo_set_mmode(u32 v) {
-    *(volatile u32 *)0x00800070u = 0x00000707u;
+    m2_geo_cmd(0x070u);
     *(volatile u32 *)0x00804000u = v;
 }
 /* STF set_window_data @0x35E0 (main_loop calls it every frame): slot 0x80 = 0x808, then push the
  * Z-clip word (0x40800000) to the GEO FIFO — the per-frame slot-0x80 render-state. */
 static void m2_geo_set_window(void) {
-    *(volatile u32 *)0x00800080u = 0x00000808u;
+    m2_geo_cmd(0x080u);
     *(volatile u32 *)0x00804000u = 0x40800000u;
 }
 
@@ -501,13 +501,13 @@ static void m2_frame_end(void) { geo_set_end_mark(); geo_interrupt_wait(); }
 static void geo_region_fill(const u16 pat[4], u32 region) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
     int i;
-    *(volatile u32 *)0x00800040u = 0x404u;        /* g10+0x40   */
+    m2_geo_cmd(0x040u);        /* g10+0x40   */
     *fifo = region;                                /* region addr */
     *fifo = 0x1000u;                               /* count       */
     for (i = 0; i < 1024; i++) {
         *fifo = pat[0]; *fifo = pat[1]; *fifo = pat[2]; *fifo = pat[3];
     }
-    *(volatile u32 *)0x00800100u = 0x1010u;        /* g10+0x100 = 0x1010 (lda 0x1010) */
+    m2_geo_cmd(0x100u);        /* g10+0x100 = 0x1010 (lda 0x1010) */
     *fifo = pat[0];                                /* final short */
     geo_set_end_mark();
     geo_interrupt_wait();
@@ -551,14 +551,14 @@ static const u32 geo_mat_int[0x20] = {  /* flt_90BA0 */
 static void geo_material_init(void) {
     volatile u32 *fifo = (volatile u32 *)0x00804000u;
     u32 last = 0u; int i;
-    *(volatile u32 *)0x00800060u = 0x606u;     /* slot 0x60 = material/luma opcode (0x606) */
+    m2_geo_cmd(0x060u);     /* slot 0x60 = material/luma opcode (0x606) */
     *fifo = 0u;                                 /* base  = 0    */
     *fifo = 0x20u;                              /* count = 0x20 records */
     for (i = 0; i < 0x20; i++) {
         *fifo = geo_mat_hdr[i];                 /* material_num_floats[i] (= flt_90A20[i]) */
         *fifo = geo_mat_int[i]; last = geo_mat_int[i];   /* flt_90BA0[i] */
     }
-    *(volatile u32 *)0x00800100u = 0x1010u;     /* config-commit (sub_29148 tail)          */
+    m2_geo_cmd(0x100u);     /* config-commit (sub_29148 tail)          */
     *fifo = last;
     /* Commit + sync this material block. STF's set_material(0x29148)/sub_290FC(0x290FC) do NOT flush
      * immediately (verified: callers @0x6A94 + camera_init @0x1F554 fall straight through, no
