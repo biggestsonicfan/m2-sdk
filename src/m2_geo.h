@@ -372,7 +372,7 @@ static void geo_set_end_mark(void);   /* fwd decl: STF set_end_mark, used by geo
  * the geometrizer rasterised a structured repeating pattern from boot (the vertical-bar
  * stripe noise). STF instead drives an empty list THROUGH the GEO for each of buffers
  * 0..2 (point GEO_WRITE at the buffer, push slot 0x0 x3, set the slot-0xF0 end mark),
- * then BUFF_ADD=buf3 + set_end_mark — so the GEO initialises each buffer itself.
+ * then M2_MEM.buff_add=buf3 + set_end_mark — so the GEO initialises each buffer itself.
  * NOTE: this is the absolute-address path the m2emu/MAME HLE mishandles (it fakes the
  * GEO); we accept that divergence here — silicon is the target. */
 static void geo_initialize(void) {
@@ -380,7 +380,7 @@ static void geo_initialize(void) {
     u32 r9, buf;
     *(volatile u32 *)GEO_CTL_REG = 0u;                    /* clear GEO ctl (0x98000c)       */
     geo_buffram_clear();                                  /* init_0: bulk-zero + END heads  */
-    *(volatile u32 *)0x00501008u = 0u;                    /* BUFF_MAX = 0                   */
+    M2_MEM.buff_max = 0u;                    /* BUFF_MAX = 0                   */
     for (r9 = 0u; r9 < 3u; r9++) {                        /* STF loop r9=0..2 (buffers 0-2) */
         buf = GEO_BUFFERRAM + geo_buf_off[r9];
         *(volatile u32 *)GEO_WRITE_REG = buf;             /* GEO_WRITE = this buffer        */
@@ -388,9 +388,9 @@ static void geo_initialize(void) {
         m2_geo_cmd(0x0F0u);       /* slot 0xF0 = end-mark command   */
     }
     buf = GEO_BUFFERRAM + geo_buf_off[3];                 /* buffer 3                       */
-    *(volatile u32 *)0x00501004u = buf;                   /* BUFF_ADD = buffer 3            */
+    M2_MEM.buff_add = buf;                                /* current DL buffer = buffer 3   */
     *(volatile u32 *)GEO_WRITE_REG = buf;                 /* GEO_WRITE = buffer 3           */
-    *(volatile u8  *)0x0050100Cu = 3u;                    /* buffIndex = 3                  */
+    M2_MEM.buff_index = 3u;                               /* buffer index = 3               */
     geo_set_end_mark();                                   /* commit buf3 (empty), flip -> 0 */
     *(volatile u8  *)GEO_ZCLIP_REG = 0xFFu;               /* ZCLIP                          */
     g_geo_buf = 0u;
@@ -415,12 +415,11 @@ static void geo_flush_flip(void) {
 
 /* ==== STF buffer-bank model + geometry_stuff (faithful port) ================
  * STF's GEO region init runs through a command FIFO and is bracketed by its real
- * buffer-bank + vsync-IRQ machinery. Requires the armed vblank IRQ (RAMBASE_START
+ * buffer-bank + vsync-IRQ machinery. Requires the armed vblank IRQ (M2_MEM.vsync
  * increments each vsync). Software globals live at their exact STF work-RAM
  * addresses (linker symbols). */
-extern volatile u8  polyBank;     /* 0x501000  STF byte_501000  */
-extern volatile u32 BUFF_ADD;     /* 0x501004  current DL buffer */
-extern volatile u8  buffIndex;    /* 0x50100C  STF byte_50100C   */
+/* The STF work-RAM globals (poly_bank / buff_add / buff_max / buff_index, and the vsync
+ * counter) are M2_MEM.<field> — see m2_memory.h (pulled in via m2.h). */
 
 static const u32 geo_buff_ram_adds[GEO_NBUF] = {
     0x900000u, 0x908000u, 0x910000u, 0x918000u    /* STF BUFF_RAM_ADDS */
@@ -428,14 +427,14 @@ static const u32 geo_buff_ram_adds[GEO_NBUF] = {
 
 /* STF change_poly_bank @0x3534: cache the COP poly bank (low byte of 0x98000C). */
 static void change_poly_bank(void) {
-    polyBank = (u8)(*(volatile u32 *)0x0098000Cu);
+    M2_MEM.poly_bank = (u8)(*(volatile u32 *)0x0098000Cu);
 }
 
-/* STF interrupt_wait @0x1768: spin until RAMBASE_START >= 2 with bit0 clear (two
+/* STF interrupt_wait @0x1768: spin until M2_MEM.vsync >= 2 with bit0 clear (two
  * vsync IRQs), clear it, then change_poly_bank. */
 static void geo_interrupt_wait(void) {
-    while ((RAMBASE_START < 2u) || (RAMBASE_START & 1u)) { }
-    RAMBASE_START = 0u;
+    while ((M2_MEM.vsync < 2u) || (M2_MEM.vsync & 1u)) { }
+    M2_MEM.vsync = 0u;
     change_poly_bank();
 }
 
@@ -443,12 +442,12 @@ static void geo_interrupt_wait(void) {
  * current buffer (g10+0x3008), advance the 0..3 buffer index, point the GEO at the
  * next buffer (g10+0x1008). (BUFF_MAX usage tracking omitted - pure diagnostic.) */
 static void geo_set_end_mark(void) {
-    u32 prev = BUFF_ADD;
+    u32 prev = M2_MEM.buff_add;
     m2_geo_cmd(0x0F0u);
     *(volatile u32 *)0x00803008u = prev;
-    buffIndex = (u8)((buffIndex + 1u) & 3u);
-    BUFF_ADD  = geo_buff_ram_adds[buffIndex];
-    *(volatile u32 *)0x00801008u = BUFF_ADD;
+    M2_MEM.buff_index = (u8)((M2_MEM.buff_index + 1u) & 3u);
+    M2_MEM.buff_add  = geo_buff_ram_adds[M2_MEM.buff_index];
+    *(volatile u32 *)0x00801008u = M2_MEM.buff_add;
 }
 
 /* ---- FRAME ORCHESTRATION (the begin/commit the draw primitives need) -----------------------------

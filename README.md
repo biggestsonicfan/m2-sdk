@@ -86,7 +86,8 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 
 | Header | What it gives you |
 |---|---|
-| `m2.h` | Core board: video bring-up, palette/tiles/text, input, sound, vblank pacing. Pulls in `m2font.h` + `m2_rand.h`. Include this first. |
+| `m2.h` | Core board: video bring-up, palette/tiles/text, input, sound, vblank pacing. Pulls in `m2font.h` + `m2_rand.h` + `m2_io.h` + `m2_memory.h`. Include this first. |
+| `m2_memory.h` | STF work-RAM control globals as one struct (`M2_MEM`): the vsync counter, timer flag, and the GEO display-list buffer block. `M2_MEM.vsync`/`timer_flag` alias the boot/IRQ asm's `_RAMBASE_START`/`_timerFlag` linker symbols (same RAM). |
 | `m2_gfx2d.h` | **Hardware-2D / vector graphics** via the GEO `direct_data` path (no coprocessor). Flat-colour `rect`/`circle`/`line`/`quad`/`tri` (2D, painter's order) **and** real-Z depth-sorted 3D primitives (`g2d_vquad`/`g2d_vline`/`g2d_vtri`, `g2d_luma` shading, `g2d_zsort_fine`). |
 | `m2_color.h` | 3D colour pipeline (`m2_color_init` = colorxlat + LUMA2 ramp; `m2_load_poly_palette` = STF 1024 colorbase colours). Needed by `m2_gfx2d.h` and the silicon object_data path. |
 | `m2_3d.h` | Coprocessor (COP/SHARC) bring-up + camera + object-submit. Pulls in the `cpres1/2` firmware + `m2_math.h`. Only needed for COP-backed 3D. |

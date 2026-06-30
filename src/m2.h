@@ -119,12 +119,9 @@ M2_API void m2_uart_hex(u32 v) {           /* "XXXXXXXX" big-endian nibbles */
 
 /* ---- linker stubs (referenced by the boot .s; defined once here) ---------- */
 volatile u32 frameVBL = 0;     /* incremented by the vblank ISR (_irq_vblank) */
-/* STF software globals at their exact STF work-RAM addresses (defined in the
- * linker script). RAMBASE_START=0x500000: VsyncScr increments it each vsync and
- * interrupt_wait spins on it (waits for >=2 with bit0 clear, then clears).
- * u32 (STF used a byte) so the ISR ld/st's it like frameVBL; logic is identical. */
-extern volatile u32 RAMBASE_START;   /* 0x00500000 */
-extern volatile u32 timerFlag;       /* 0x0050008C (STF byte_50008C)  */
+/* STF work-RAM globals (M2_MEM.vsync = RAMBASE_START etc.) — the vblank/timer ISRs in
+ * i_handle.s still reach them via the linker symbols _RAMBASE_START / _timerFlag. */
+#include "m2_memory.h"
 void handleSerialIRQ(void) { }
 void kickGEO(void) { }
 void waitVBL(void) { }
