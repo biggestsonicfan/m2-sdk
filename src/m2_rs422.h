@@ -30,12 +30,20 @@
 
 #include "m2.h"
 
-#define XT_TXD1 (*(volatile u8 *)0x01C00012u)   /* W: command / strobe        */
-#define XT_TXD2 (*(volatile u8 *)0x01C00014u)   /* W: data byte               */
-#define XT_RXD1 (*(volatile u8 *)0x01C00016u)   /* R: status (bit0 = valid)   */
-#define XT_RXD2 (*(volatile u8 *)0x01C00018u)   /* R: inbound data byte       */
-#define XT_FLAG (*(volatile u8 *)0x01C0001Au)   /* R: TX/RX buffer flags      */
-#define XT_MODE (*(volatile u8 *)0x01C0001Cu)   /* W: LOOP / satellite / sat# */
+/* The 315-5649 I/O chip, mapped at 0x01C00000. Byte registers on a 2-byte stride.
+ * Offsets 0x00..0x11 are the bank + P1/P2 input region (see m2.h M2_IO_BANK / M2_IN*);
+ * the RS-422 link registers begin at 0x12. Access via XT_IO.<reg> (e.g. XT_IO.txd1). */
+typedef struct {
+    u8 _io0[0x12];   /* 0x00..0x11  bank + P1/P2 inputs (m2.h)  */
+    u8 txd1, _p13;   /* 0x12  W: command / strobe              */
+    u8 txd2, _p15;   /* 0x14  W: data byte                     */
+    u8 rxd1, _p17;   /* 0x16  R: status (bit0 = valid)         */
+    u8 rxd2, _p19;   /* 0x18  R: inbound data byte             */
+    u8 flag, _p1b;   /* 0x1A  R: TX/RX buffer flags            */
+    u8 mode;         /* 0x1C  W: LOOP / satellite / sat#       */
+} m2_io_t;
+
+#define XT_IO (*(volatile m2_io_t *)0x01C00000u)
 
 #define XT_RXBF_BOTH 0x0Cu   /* FLAG bits 2,3: RX1BF & RX2BF (handshake target) */
 #define XT_RX_VALID  0x01u   /* RXD1 status bit0: inbound data valid            */
@@ -53,21 +61,21 @@ static u8  xt_ring[XT_RING];
 static u16 xt_rh, xt_rt;     /* head (read), tail (write) */
 
 M2_API void xtransport_init(void) {
-    XT_MODE = 0x00u;         /* master, no loopback (written twice: gcc960 g14) */
-    XT_MODE = 0x00u;
+    XT_IO.mode = 0x00u;         /* master, no loopback (written twice: gcc960 g14) */
+    XT_IO.mode = 0x00u;
     xt_rh = xt_rt = 0;
 }
 
 M2_API void xtransport_loopback(int on) {
     u8 v = on ? XT_LOOP : 0x00u;
-    XT_MODE = v;
-    XT_MODE = v;
+    XT_IO.mode = v;
+    XT_IO.mode = v;
 }
 
 /* Wait for the two-channel handshake: both receive buffers full (bounded). */
 static void xt_wait_ack(void) {
     u32 g = 0;
-    while ((XT_FLAG & XT_RXBF_BOTH) != XT_RXBF_BOTH && ++g < XT_SPIN) { }
+    while ((XT_IO.flag & XT_RXBF_BOTH) != XT_RXBF_BOTH && ++g < XT_SPIN) { }
 }
 
 /* One faithful transaction: latch data into TXD2, strobe the command into TXD1,
@@ -75,11 +83,11 @@ static void xt_wait_ack(void) {
  * inbound byte is pushed into the receive ring. */
 static void xt_transact(u8 cmd, u8 data) {
     u8 st, dt, nt;
-    XT_TXD2 = data;          /* data first ... */
-    XT_TXD1 = cmd;           /* ... then the strobe (triggers the transfer) */
+    XT_IO.txd2 = data;          /* data first ... */
+    XT_IO.txd1 = cmd;           /* ... then the strobe (triggers the transfer) */
     xt_wait_ack();
-    st = XT_RXD1;            /* channel-0 status */
-    dt = XT_RXD2;            /* channel-1 inbound data */
+    st = XT_IO.rxd1;            /* channel-0 status */
+    dt = XT_IO.rxd2;            /* channel-1 inbound data */
     if (st & XT_RX_VALID) {
         nt = (u8)((xt_rt + 1) % XT_RING);
         if (nt != xt_rh) { xt_ring[xt_rt] = dt; xt_rt = nt; }
@@ -92,10 +100,10 @@ static void xt_transact(u8 cmd, u8 data) {
  * peer handshake (bounded via xt_wait_ack so a dead link can't hang the boot). Run with
  * a peer/loopback present (each handshake needs RX to fill). */
 static void xt_link_cmd(u8 cmd) {            /* TXD1-only (TXD2 unchanged), drain RX */
-    XT_TXD1 = cmd; xt_wait_ack(); (void)XT_RXD1; (void)XT_RXD2;
+    XT_IO.txd1 = cmd; xt_wait_ack(); (void)XT_IO.rxd1; (void)XT_IO.rxd2;
 }
 static u8 xt_link_cmd_d(u8 cmd, u8 data) {   /* TXD2=data, strobe, drain; ret RXD2   */
-    XT_TXD2 = data; XT_TXD1 = cmd; xt_wait_ack(); (void)XT_RXD1; return XT_RXD2;
+    XT_IO.txd2 = data; XT_IO.txd1 = cmd; xt_wait_ack(); (void)XT_IO.rxd1; return XT_IO.rxd2;
 }
 M2_API void xt_link_init(void) {
     u8 r; volatile u32 d;
@@ -103,10 +111,10 @@ M2_API void xt_link_init(void) {
     xt_link_cmd_d(0x08u, 0x7Du);                 /* 2 */
     xt_link_cmd(0x81u);                          /* 3 */
     xt_link_cmd(0x88u);                          /* 4 */
-    xt_link_cmd(0x81u); r = XT_RXD2;             /* 5 */
+    xt_link_cmd(0x81u); r = XT_IO.rxd2;             /* 5 */
     xt_link_cmd_d(0x01u, (u8)(r & ~1u));         /* 6: echo RXD2, bit0 clear */
     for (d = 0; d < 1000u; d++) { }              /* 7: STF 1000-iter settle */
-    xt_link_cmd(0x81u); r = XT_RXD2;             /* 8 */
+    xt_link_cmd(0x81u); r = XT_IO.rxd2;             /* 8 */
     xt_link_cmd_d(0x01u, (u8)(r | 1u));          /* 9: echo RXD2, bit0 set   */
     xt_link_cmd(0x82u);                          /* 10 */
 }
@@ -119,7 +127,7 @@ M2_API int xtransport_trygetc(void) {
     u8 f;
     if (xt_pb >= 0) { int b = xt_pb; xt_pb = -1; return b; }
 
-    f = XT_FLAG;
+    f = XT_IO.flag;
 
     /* The real 315-5649 idles with FLAG bit6 (0x40) SET; MAME never sets it (its FLAG is
      * only 0x00..0x0C). So bit6 cleanly selects SILICON vs MAME. On SILICON do PURE
@@ -127,16 +135,16 @@ M2_API int xtransport_trygetc(void) {
      * the single-channel RX). Read on ANY RXBF bit: a single byte lands in RXD1 (RX1BF,
      * FLAG=0x44), a rapid multi-byte frame sets BOTH (0x0C). RX1BF has priority. */
     if (f & 0x40u) {                              /* real silicon */
-        if (f & 0x04u) return (int)XT_RXD1;       /* RX1BF (alone or with RX2BF) */
-        if (f & 0x08u) return (int)XT_RXD2;       /* RX2BF only */
+        if (f & 0x04u) return (int)XT_IO.rxd1;       /* RX1BF (alone or with RX2BF) */
+        if (f & 0x08u) return (int)XT_IO.rxd2;       /* RX2BF only */
         return -1;                                /* no byte; pure poll, no strobe */
     }
 
     /* MAME (bit6 clear): strobe to pop the host-injection FIFO — delivered synchronously
      * (BOTH RXBF set + status 0x01 in RXD1 / data in RXD2). No spin. */
-    XT_TXD2 = 0; XT_TXD1 = XT_CMD_IDLE;
-    if ((XT_FLAG & XT_RXBF_BOTH) == XT_RXBF_BOTH) {
-        u8 st = XT_RXD1, dt = XT_RXD2;
+    XT_IO.txd2 = 0; XT_IO.txd1 = XT_CMD_IDLE;
+    if ((XT_IO.flag & XT_RXBF_BOTH) == XT_RXBF_BOTH) {
+        u8 st = XT_IO.rxd1, dt = XT_IO.rxd2;
         if (st & XT_RX_VALID) return (int)dt;
     }
     return -1;
