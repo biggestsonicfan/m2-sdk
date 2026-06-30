@@ -96,7 +96,8 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_obj.h` | **Silicon 3D objects** (COP-bridge): `m2_silicon_boot` (one-call bring-up), `m2_obj_frame_setup` (projection ONCE/frame), `m2_obj_submit` (a model-table object), `m2_solid_quad` (flat-colour quad). Pulls in `stf_cop_preamble.h`. m2-snake's ice-cube sandbox. |
 | `m2_tex_codec.h` | Decode an STF compressed texture page from the texture ROM into a GEO sheet (`tex_load_atlas`) — textures straight from the ROM source, no embedded blob. |
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
-| `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport. |
+| `m2_io.h` | The 315-5649 on-board I/O chip as one struct (`M2_IO`): input bank + player ports, the RS-422 link registers, and the STF bring-up handshake. Pulled in by `m2.h`. |
+| `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport (uses `M2_IO`). |
 | `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
 

@@ -58,11 +58,7 @@ static float m2_sqrtf(float x) {
 #define M2_CHARGFX  ((volatile u8  *)0x01080000u)  /* 8x8 4bpp char gfx, idx*32     */
 #define M2_PALETTE  ((volatile u16 *)0x01800000u)  /* BGR555, idx = palbank*16+pix  */
 
-#define M2_IO_ENABLE (*(volatile u16 *)0x01C00040u)
-#define M2_IO_BANK   (*(volatile u8  *)0x01C00000u)
-#define M2_IN0       (*(volatile u8  *)0x01C00002u)
-#define M2_IN1       (*(volatile u8  *)0x01C00004u)  /* P1 (active-low)             */
-#define M2_IN2       (*(volatile u8  *)0x01C00006u)  /* P2 (active-low)             */
+#include "m2_io.h"    /* the 315-5649 I/O chip as one struct: M2_IO.bank/in0/in1/in2/... */
 
 /* Launcher app-exit hook (a fixed cell in real work RAM, above the heap and below
  * the i960 fault/interrupt tables at 0x5ff000): when armed, m2_vsync() returns to
@@ -159,8 +155,8 @@ M2_API void m2_vsync(void) {
     {
         volatile u32 *ex = (volatile u32 *)M2_EXIT_CTL;
         if (ex[0] == M2_EXIT_MAGIC) {
-            M2_IO_BANK = 0;
-            if (!(M2_IN0 & 0x10u)) ((void (*)(void))ex[1])();   /* never returns */
+            M2_IO.bank = 0;
+            if (!(M2_IO.in0 & 0x10u)) ((void (*)(void))ex[1])();   /* never returns */
         }
     }
 }
@@ -241,8 +237,8 @@ enum { M2_UP = 1, M2_DOWN = 2, M2_LEFT = 4, M2_RIGHT = 8,
 M2_API u32 m2_input(int player) {
     u8 v;
     u32 r = 0;
-    M2_IO_BANK = 0;                 /* select digital bank 0 */
-    v = player ? M2_IN2 : M2_IN1;   /* active-low */
+    M2_IO.bank = 0;                 /* select digital bank 0 */
+    v = player ? M2_IO.in2 : M2_IO.in1;   /* active-low */
     if (!(v & 0x20)) r |= M2_UP;
     if (!(v & 0x10)) r |= M2_DOWN;
     if (!(v & 0x80)) r |= M2_LEFT;
@@ -253,8 +249,8 @@ M2_API u32 m2_input(int player) {
     return r;
 }
 M2_API u32 m2_start(void) {         /* IN0: bit4 = START1, bit5 = START2 */
-    M2_IO_BANK = 0;
-    return (!(M2_IN0 & 0x10) ? 1u : 0u) | (!(M2_IN0 & 0x20) ? 2u : 0u);
+    M2_IO.bank = 0;
+    return (!(M2_IO.in0 & 0x10) ? 1u : 0u) | (!(M2_IO.in0 & 0x20) ? 2u : 0u);
 }
 
 /* Launcher control of the m2_vsync P1-Start exit hook (see M2_EXIT_CTL). */
@@ -384,7 +380,6 @@ M2_API void m2_init(void) {
      * this is inert there — but silicon needs it. */
     {
         volatile u16 *uart_ctl = (volatile u16 *)0x01C80002u;  /* i8251 control reg */
-        volatile u8  *io       = (volatile u8  *)0x01C00000u;  /* 315-5649 I/O chip */
         volatile int d;
         /* i8251 aux UART, matching House of the Dead _InitSerial exactly: 3 null/
          * sync writes, internal reset (0x40), mode 0x4E (async x16, 8-N-1), then the
@@ -396,12 +391,11 @@ M2_API void m2_init(void) {
         *uart_ctl = 0x40; for (d = 4; d > 0; d--) { }   /* internal reset  */
         *uart_ctl = 0x4E; for (d = 4; d > 0; d--) { }   /* mode: 8-N-1 x16 */
         *uart_ctl = 0x37;                                /* command: TxEN|RxEN */
-        /* 315-5649 handshake: 0x40<-0, 0x24<-1, then the "SEGA" signature at
-         * 0x34/0x36/0x38/0x3A (replaces the old M2_IO_ENABLE=1, which wrote 1 to
-         * 0x40 — the wrong reg per STF). */
-        io[0x40] = 0x00;
-        io[0x24] = 0x01;
-        io[0x34] = 'S'; io[0x36] = 'E'; io[0x38] = 'G'; io[0x3A] = 'A';
+        /* 315-5649 handshake: enable<-0, hs<-1, then the "SEGA" signature (replaces an
+         * old M2_IO_ENABLE=1, which wrote the 0x40 reg with the wrong value per STF). */
+        M2_IO.enable = 0x00;
+        M2_IO.hs     = 0x01;
+        M2_IO.sig0 = 'S'; M2_IO.sig1 = 'E'; M2_IO.sig2 = 'G'; M2_IO.sig3 = 'A';
     }
 
     M2_IRQ_ENA = M2_IRQ_VBL;       /* enable vblank source (written twice — */
