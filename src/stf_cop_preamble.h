@@ -1,29 +1,32 @@
 #ifndef STF_COP_PREAMBLE_H
 #define STF_COP_PREAMBLE_H
-/* stf_cop_preamble.h — STF poly_test_camera's per-object COP PROJECTION+BASIS preamble, IN C.
+/* stf_cop_preamble.h — STF poly_test_camera's per-object COP preamble, IN C.
  * Originally a verbatim 46-word capture (tools/cop_polytest_obj1.txt, poly-test obj1, write-positions
  * 43-88); now expressed as the equivalent FIFO emission. The bytes pushed are IDENTICAL to the capture
- * (verified op-by-op) — this is a readability rewrite, not a behaviour change.
+ * (verified op-by-op) — a readability rewrite, not a behaviour change.
  *
  * WHAT IT IS
- *   Before STF transforms+submits ANY object it primes the COP (cpres1, the math SHARC) with two pieces
- *   of render state: the screen PROJECTION extent (~4000) and the object's ORTHONORMAL BASIS (its axis
- *   frame, derived from ±2.0 unit vectors). Skipping it is why our COP would report ready (COP_STAT=1)
- *   but never commit a frame (COP_WPOS frozen): the state it transforms against was never established.
+ *   STF replays this fixed math sequence on the COP (cpres1, the math SHARC) before it transforms+submits
+ *   an object. EMPIRICALLY it is required: skip it and the COP reports ready (COP_STAT=1) but never commits
+ *   a frame (COP_WPOS frozen). NOTE the four ops below are PURE COMPUTE (in -> out) — they do NOT mutate the
+ *   COP's bone/matrix/projection state (unlike set_pos / ang_x / ...). So the preamble does not "set render
+ *   state" by side effect; each result is computed and immediately drained here. Replaying the exact
+ *   captured FIFO sequence is a drain/handshake PREREQUISITE for the commit, not a state write. (The operands
+ *   themselves read like a poly_test_camera viewport extent ~4000 + an axis frame from +-2.0 unit vectors.)
  *
- * THE OPS  (cpres1 dispatch; the command word encodes op = word / 0x800101)
- *   0x17 int2f   integer -> float
- *   0x18 f2int   float   -> integer
- *   0x2B dist2D  2D vector length  (4 operands; normalises the basis axes)
- *   0x2F azimuth 2D vector angle   (4 operands; atan2-style, gives the basis ANGLE)
+ * THE OPS  (verified against the cpres1 disassembly in ../m2-hle; op = command word / 0x800101)
+ *   0x17 int2f   integer -> float             (handler: f0 = float r1)
+ *   0x18 f2int   float   -> integer, truncate (handler: r0 = fix f1)
+ *   0x2B dist2D  4 floats (two XZ points) -> sqrt((x2-x1)^2 + (z2-z1)^2)   (vector length, float)
+ *   0x2F azimuth 4 floats (two XZ points) -> atan2(z2-z1, x2-x1)           (vector angle, i16: 0x10000=360deg)
  *   Every op yields ONE result that MUST be drained (read back) — an un-drained result backs up the COP
  *   output FIFO and stalls it before the submit. Each emit helper below drains its op's single result.
  *
- * STRUCTURE — two near-identical passes, each = [viewport extent] + [orthonormal basis]:
- *   pass 1 : f2int(VIEWPORT)x2, int2f(3999)x2, then azimuth(+2,-2) + 3x dist2D normalise.
- *   pass 2 : same viewport, then azimuth(-2,+2) + 1x dist2D (the other axis).
- *   (The per-axis role of each azimuth/dist2D is inferred from the op types + the ±2.0 / ~4000 constants;
- *    the emitted words are exact, so the inference doesn't affect behaviour.)
+ * STRUCTURE — two near-identical passes, each = [viewport pair] + [axis-frame ops]:
+ *   pass 1 : f2int(VIEWPORT)x2, int2f(3999)x2, then azimuth + 3x dist2D.
+ *   pass 2 : same viewport pair, then azimuth + 1x dist2D.
+ *   (Op identities + signatures are from the disassembly; the "viewport/axis-frame" labels are how the
+ *    captured operands read and don't affect the emitted bytes.)
  */
 
 /* The viewport extent operand. 0x4579FFFF = 4000.0f MINUS ONE ULP (3999.999756f) — NOT "3999.99".
