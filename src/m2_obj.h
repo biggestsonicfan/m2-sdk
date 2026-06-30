@@ -33,9 +33,7 @@
 #ifndef M2_OBJ_H
 #define M2_OBJ_H
 
-#include "m2_3d.h"             /* m2_3d_boot, m2_cop_initialize, m2_cam_geo_proj, cop_drain, g_cop_p* */
-#include "m2_geo.h"            /* geo_func/geo_initialize/geometry_stuff, m2_frame_*, geo__f          */
-#include "m2_color.h"          /* m2_color_init, m2_load_poly_palette                                 */
+#include "m2_boot.h"           /* m2_silicon_boot + the COP/GEO/colour layers it composes (m2_3d/geo/color) */
 #include "stf_cop_preamble.h"  /* cop_obj_preamble: poly_test_camera COP basis/viewport preamble      */
 
 #define M2_FLAT_QUAD_MODEL 456u   /* STF model-table flat quad (1 face, 12x12, normal +Y, +-6 in XZ) */
@@ -43,19 +41,7 @@
 
 static u32 m2_obj_fb(float f){ union{float f;u32 u;}x; x.f=f; return x.u; }  /* float -> IEEE bits */
 
-/* One-call silicon bring-up — the PROVEN order (each omission breaks it: missing geometry_stuff =>
- * the real GEO firmware walks into an unimplemented SHARC IOP write; missing m2_cop_initialize =>
- * the COP never commits, GEO stuck on header words). Call ONCE after m2_init(); set backdrop/palette
- * after (m2_color_init has loaded the default 1024-colour polygon palette). */
-static void m2_silicon_boot(void) {
-    m2_3d_boot();            /* COP (cpres1) + real GEO geometrizer (cpres2) firmware upload */
-    m2_color_init();         /* colorxlat + lumaram (else everything renders black)          */
-    m2_load_poly_palette();  /* STF 1024-colour default polygon palette                      */
-    geo_func();              /* prime the GEO command region (GEO_RELATED)                    */
-    m2_cop_initialize();     /* arm the COP (wait-ready + write 0)                            */
-    geo_initialize();        /* STF GEO init: 4 rotating display-list buffers                */
-    geometry_stuff();        /* seed the 5 GEO regions (clip/matrix/microcode) — REQUIRED    */
-}
+/* m2_silicon_boot() — the one-call bring-up — lives in m2_boot.h (included above). */
 
 /* ---- flat-colour quad support: a uniform-luma texram patch the colour headers sample -------------
  * A flat fill on real silicon needs a TEXTURED header (th0=0x4012) sampling a uniform-luma region —
