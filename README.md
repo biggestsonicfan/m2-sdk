@@ -89,7 +89,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2.h` | Core board: video bring-up, palette/tiles/text, input, sound, vblank pacing. Pulls in `m2font.h` + `m2_rand.h`. Include this first. |
 | `m2_gfx2d.h` | **Hardware-2D / vector graphics** via the GEO `direct_data` path (no coprocessor). Flat-colour `rect`/`circle`/`line`/`quad`/`tri` (2D, painter's order) **and** real-Z depth-sorted 3D primitives (`g2d_vquad`/`g2d_vline`/`g2d_vtri`, `g2d_luma` shading, `g2d_zsort_fine`). |
 | `m2_color.h` | 3D colour pipeline (`m2_color_init` = colorxlat + LUMA2 ramp; `m2_load_poly_palette` = STF 1024 colorbase colours). Needed by `m2_gfx2d.h` and the silicon object_data path. |
-| `m2_3d.h` | Coprocessor (COP/SHARC) bring-up + matrix/trig command interface. Pulls in the `cpres1/2` firmware + `m2_fastmath.h`. Only needed for COP-backed 3D math. |
+| `m2_3d.h` | Coprocessor (COP/SHARC) bring-up + camera + object-submit. Pulls in the `cpres1/2` firmware + `m2_math.h`. Only needed for COP-backed 3D. |
 | `m2_geo.h` | Descriptive GEO display-list builder (object_data for real-hardware-portable geometry; direct_data primitives). Includes `geo_initialize`/`geometry_stuff` — the real-silicon GEO boot/frame model. |
 | `m2_text.h` | **Silicon-capable** text: COP model-456 glyphs (`m2_draw_text`, world coords) + `m2_text_screen` (pixel coords). gFont → 128×64 texram0 atlas. |
 | `m2_draw.h` | 2D filled shapes via the DIRECT-FIFO path: `m2_fill_rect`/`fill_ellipse`/`fill_circle` (+ `_o` outlines), `m2_draw_text_px`. Pixel-coord, multi-colour, z-layered. Per frame: `m2_frame_begin` → **`m2_draw_frame_setup`** (render-state ONCE/frame) → draws → `m2_frame_commit`. MAME-proven (`M2_HLE_GEO_OFF`). |
@@ -97,7 +97,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_tex_codec.h` | Decode an STF compressed texture page from the texture ROM into a GEO sheet (`tex_load_atlas`) — textures straight from the ROM source, no embedded blob. |
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport. |
-| `m2_math.h` | Math-coprocessor (COP/cpres1) op emitters: `cop_int2f`/`cop_f2int_raw`/`cop_azimuth`/`cop_dist2d` (push one COP math op to a FIFO + drain). Semantics verified vs the cpres1 disassembly. |
+| `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
