@@ -97,6 +97,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_tex_codec.h` | Decode an STF compressed texture page from the texture ROM into a GEO sheet (`tex_load_atlas`) — textures straight from the ROM source, no embedded blob. |
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport. |
+| `m2_math.h` | Math-coprocessor (COP/cpres1) op emitters: `cop_int2f`/`cop_f2int_raw`/`cop_azimuth`/`cop_dist2d` (push one COP math op to a FIFO + drain). Semantics verified vs the cpres1 disassembly. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
