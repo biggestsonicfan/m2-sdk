@@ -40,16 +40,17 @@ static u32 cop__fbits(float f) { union { float f; u32 u; } x; x.f = f; return x.
 /* drain one COP result word (one FIFO read), same as cop_drain(cf,1). */
 static void cop__drain1(volatile u32 *cf) { volatile u32 d = *cf; (void)d; }
 
-/* the four cpres1 ops used by the preamble: push opcode + operands, then drain the single result. */
-static void cop_f2int_raw(volatile u32 *cf, u32 fbits) { *cf = 0x0C001818u; *cf = fbits;     cop__drain1(cf); }
-static void cop_int2f(volatile u32 *cf, u32 ival)      { *cf = 0x0B801717u; *cf = ival;      cop__drain1(cf); }
+/* the four cpres1 ops used by the preamble (COP_* from m2_3d.h): push opcode + operands, then drain the
+ * single result. cop_azimuth uses COP_ATAN2 (op 0x2F = the 4-arg azimuth/vector form). */
+static void cop_f2int_raw(volatile u32 *cf, u32 fbits) { *cf = COP_F2INT; *cf = fbits; cop__drain1(cf); }
+static void cop_int2f(volatile u32 *cf, u32 ival)      { *cf = COP_INT2F; *cf = ival;  cop__drain1(cf); }
 static void cop_azimuth(volatile u32 *cf, float a, float b, float c, float d) {
-    *cf = 0x17802F2Fu;
+    *cf = COP_ATAN2;
     *cf = cop__fbits(a); *cf = cop__fbits(b); *cf = cop__fbits(c); *cf = cop__fbits(d);
     cop__drain1(cf);
 }
 static void cop_dist2d(volatile u32 *cf, float a, float b, float c, float d) {
-    *cf = 0x15802B2Bu;
+    *cf = COP_DIST2D;
     *cf = cop__fbits(a); *cf = cop__fbits(b); *cf = cop__fbits(c); *cf = cop__fbits(d);
     cop__drain1(cf);
 }
