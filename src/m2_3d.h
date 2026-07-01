@@ -220,12 +220,14 @@ typedef struct {
     float eye[3];               /* camera position in world space (looks down +Z) */
     u32   yaw, pitch;           /* i16 view angles (0x10000 = 360deg); 0 = look +Z */
     float focus;                /* focal length (focus_dist), default 280.0        */
-    /* derived by m2_cam_set_angles() from yaw/pitch — default to identity rotation */
-    float sy, cy, sx, cx;
+    /* derived by m2_cam_set_angles() from yaw/pitch — default to identity rotation.
+     * nsy/nsx are the negated sines (-sy/-sx) so the two subtractive rotation terms
+     * in m2_cam_world_to_view can also route through dot2D (a*b + c*d). */
+    float sy, cy, sx, cx, nsy, nsx;
 } m2_camera_t;
 
 static m2_camera_t m2_cam = { {0.0f, 0.0f, 0.0f}, 0u, 0u, M2_FOCUS_DIST,
-                              0.0f, 1.0f, 0.0f, 1.0f };
+                              0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f };
 
 static void m2_cam_set_eye(float x, float y, float z) {
     m2_cam.eye[0] = x; m2_cam.eye[1] = y; m2_cam.eye[2] = z;
@@ -239,18 +241,23 @@ static void m2_cam_set_angles(u32 yaw, u32 pitch) {
     m2_cam.yaw = yaw; m2_cam.pitch = pitch;
     cop_sincos(yaw,   &m2_cam.sy, &m2_cam.cy);
     cop_sincos(pitch, &m2_cam.sx, &m2_cam.cx);
+    m2_cam.nsy = m2_cop_fsub(0.0f, m2_cam.sy);   /* cache -sy / -sx once per frame */
+    m2_cam.nsx = m2_cop_fsub(0.0f, m2_cam.sx);
 }
 
 /* World -> view (eye-relative): translate by -eye, yaw about Y, then pitch about X.
- * out is the position to feed COP_SET_POS for an object at world position p. */
+ * out is the position to feed COP_SET_POS for an object at world position p.
+ * All arithmetic goes through the m2_cop_f* helpers (the SDK convention, same as
+ * m2_geo.h's v3* ops): native i960 FP in a fastmath build, COP-FIFO float under
+ * M2_NO_FASTMATH so m2emulator (no i960 FPU) never sees an invalid FP opcode. */
 static void m2_cam_world_to_view(const float p[3], float out[3]) {
-    float dx = p[0] - m2_cam.eye[0];
-    float dy = p[1] - m2_cam.eye[1];
-    float dz = p[2] - m2_cam.eye[2];
-    float x1 =  m2_cam.cy * dx - m2_cam.sy * dz;     /* yaw about Y   */
-    float z1 =  m2_cam.sy * dx + m2_cam.cy * dz;
-    float y2 =  m2_cam.cx * dy - m2_cam.sx * z1;     /* pitch about X */
-    float z2 =  m2_cam.sx * dy + m2_cam.cx * z1;
+    float dx = m2_cop_fsub(p[0], m2_cam.eye[0]);
+    float dy = m2_cop_fsub(p[1], m2_cam.eye[1]);
+    float dz = m2_cop_fsub(p[2], m2_cam.eye[2]);
+    float x1 = m2_cop_dot2d(m2_cam.cy, dx, m2_cam.nsy, dz);   /* cy*dx - sy*dz  (yaw about Y)   */
+    float z1 = m2_cop_dot2d(m2_cam.sy, dx, m2_cam.cy,  dz);   /* sy*dx + cy*dz                  */
+    float y2 = m2_cop_dot2d(m2_cam.cx, dy, m2_cam.nsx, z1);   /* cx*dy - sx*z1  (pitch about X) */
+    float z2 = m2_cop_dot2d(m2_cam.sx, dy, m2_cam.cx,  z1);   /* sx*dy + cx*z1                  */
     out[0] = x1; out[1] = y2; out[2] = z2;
 }
 

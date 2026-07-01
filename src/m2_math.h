@@ -104,6 +104,24 @@ static u32 m2_cop_atan2(float x1, float x2, float z1, float z2) {
     return M2_COPFIFO & 0xffffu;
 }
 
+/* =============================================================================
+ * ⚠ FIFO ROUND-TRIP OPS — NOT FOR PER-FRAME RENDER PATHS
+ * Everything from here down (tan/sin_scale/cos_scale, asin, atan2f, rsqrt,
+ * mag2d/mag3d/dist3d, dot3, add3/sub3/scale3, m2w/w2m, norm2/3, rot2d) is a
+ * blocking SHARC round-trip: each call writes the COP FIFO and STALLS the i960
+ * until the SHARC answers. Unlike m2_cop_fadd/fmul/.../dot2d, these are NOT
+ * overridden by m2_fastmath.h — they hit the FIFO in EVERY build.
+ *
+ * Do NOT use them in the per-frame geometry/text render path: they stall the
+ * i960, and per-frame they share the FIFO with the object-submit stream, which
+ * can hang the render loop and crash m2emulator (same reason m2.h keeps sqrt off
+ * the COP and CMakeLists warns against M2_NO_FASTMATH). For per-frame scalar/
+ * vector work use the overridable helpers (native/soft-float) + m2_sqrtf.
+ *
+ * These belong in COLD-PATH gameplay logic — distance/facing checks, lerps, IK,
+ * one-shot setup — called a handful of times per frame OUTSIDE the object submit.
+ * ============================================================================= */
+
 /* tan / scaled sin & cos of a 16-bit angle (0x10000 = 360deg). tan is sin/cos on
  * the SHARC, so it blows up near +-90deg exactly like the hardware does. */
 static float m2_cop_tan(u32 ang)                { m2_cop(COP_TAN);      m2_cop_pi(ang); return m2_cop_gf(); }

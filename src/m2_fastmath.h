@@ -36,4 +36,8 @@ static float m2_fsqrt(float x) {
 #define m2_cop_f2int(f)    ((int)(f))
 #define m2_cop_sqrt(x)     m2_fsqrt(x)
 
+/* 2-term multiply-add. On the COP this is one dot2D op (index 0x59); here it folds
+ * to native FLOPs so the fastmath path pays no FIFO round-trip. */
+#define m2_cop_dot2d(a, b, c, d)  ((a) * (b) + (c) * (d))
+
 #endif /* M2_FASTMATH_H */
