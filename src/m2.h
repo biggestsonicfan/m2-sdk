@@ -32,6 +32,8 @@ typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;
 
+#include "m2_debug.h"   /* M2_DBG / M2_DBGH serial trace (no-op unless -DM2_DEBUG) */
+
 /* Pure-C Newton sqrt — the SDK's one sqrt (was duplicated as g2d__sqrt/geo__sqrt).
  * Do NOT route this through the COP (m2_cop_sqrt): COP_SQRT is always "defined"
  * (an opcode macro, not a feature flag), and waiting on the COP math FIFO can hang

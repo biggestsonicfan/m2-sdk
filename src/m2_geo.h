@@ -26,29 +26,8 @@
 #define M2_GEO_H
 
 #include "m2.h"
+#include "m2_constants.h" /* GEO_OP_* opcodes, GEO_SLOT_*, GEO_BUFFERRAM/GEO_START/GEO_READ_REG (the hardware map) */
 #include "m2_3d.h"   /* COP/DSP float helpers used by the object_data primitives */
-
-#define GEO_BUFFERRAM   0x00900000u   /* m_bufferram, i960-mapped               */
-#define GEO_START       0x00800000u   /* g10 in STF — GEO command region        */
-#define GEO_READ_REG    0x00803008u   /* write -> geo_read_start                */
-
-/* Opcode words (cmd in bits[28:23]) — STF's encodings, verified vs geo_parse. */
-#define GEO_OP_OBJECT     0x00800101u  /* 01 object_data: tpa, tha, oba, obc    */
-#define GEO_OP_WINDOW     0x01800303u  /* 03 window/clip: 6 coords              */
-#define GEO_OP_TEXPARAM   0x03000606u  /* 06 texture params: index, count, ...  */
-#define GEO_OP_MODE       0x03800707u  /* 07 geo mode (&3 selects vtx parser)   */
-#define GEO_OP_ZSORT      0x04000808u  /* 08 zsort mode                         */
-#define GEO_OP_FOCAL      0x04800909u  /* 09 focal distance: fx, fy             */
-#define GEO_OP_LIGHT      0x05000A0Au  /* 0a light vector: x, y, z              */
-#define GEO_OP_MATRIX     0x05800B0Bu  /* 0b transform matrix: 12 floats        */
-#define GEO_OP_LOD        0x0B001616u  /* 16 LOD                                */
-#define GEO_OP_END        0x07800F0Fu  /* 0f end of list                        */
-
-/* geo mode low 2 bits select the polygon vertex parser. */
-#define GEO_MODE_NP_NS  0u   /* normals present, no specular */
-#define GEO_MODE_NP_S   1u   /* normals present, specular    */
-#define GEO_MODE_NN_NS  2u   /* no normals,      no specular */
-#define GEO_MODE_NN_S   3u   /* no normals,      specular    */
 
 /* STF model table: entry N = MODEL_TABLE + N*16 = {uv, material, mesh, w3},
  * which map directly to object_data {tpa, tha, oba, (obc bound)}. */
@@ -96,19 +75,26 @@ static void geo_texparam_flat(u8 diffuse, u8 ambient) {
  * emit the same window clip + a 0x20-entry TEXPARAM table + a 3-vector LIGHT; only the TEXPARAM
  * material word and the light vector differ per path, so those are arguments. */
 static void m2_geo_fifo_window_full(void) {
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    m2_geo_cmd(0x030u);             /* set_window slot 0x30 */
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
+    m2_geo_cmd(GEO_SLOT_WINDOW);
     *fifo = 0x0000007Fu; *fifo = 0x01F001FFu;               /* start / end clip rect */
     *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu; *fifo = 0x00F8013Fu;
 }
 static void m2_geo_fifo_texparam(u32 param) {               /* m2_draw: 0x10FF, m2_obj: 0x60FF */
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    int q; *fifo = 0x03000606u; *fifo = 0u; *fifo = 0x20u;
-    for (q = 0; q < 0x20; q++) { *fifo = param; *fifo = 0x3F800000u; }
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
+    int q; *fifo = GEO_OP_TEXPARAM; *fifo = 0u; *fifo = 0x20u;
+    for (q = 0; q < 0x20; q++) { *fifo = param; *fifo = geo__f(1.0f); }
 }
+/* STF poly_test_camera light vector (slot 0xA0), CAPTURED LIVE from the running game:
+ * these are the SHARC's own computed outputs, NOT re-derivable from decimal float
+ * literals — e.g. sqrtf(0.5f) = 0x3F3504F3 but the capture is ...ED. Keep the bit
+ * patterns verbatim. Decodes to approximately (0.7071, -0.6859, 0.1718). */
+#define STF_LIGHT_X_BITS 0x3F3504EDu
+#define STF_LIGHT_Y_BITS 0xBF2F9844u
+#define STF_LIGHT_Z_BITS 0x3E2FEF42u
 static void m2_geo_fifo_light(u32 x, u32 y, u32 z) {        /* slot 0xA0 + 3 light-vector words */
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    m2_geo_cmd(0x0A0u);
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
+    m2_geo_cmd(GEO_SLOT_LIGHT);
     *fifo = x; *fifo = y; *fifo = z;
 }
 
@@ -140,12 +126,8 @@ static void geo_object_from_table(u32 n) {
  * (NO focal), unlike object_data which bakes geo_focal into its matrix — so to
  * align a line with an object at world (X,Y,Z) supply (focal*X, focal*Y, Z).
  * Color is flat: a texture-header slot in texture-header RAM carries the colorbase
- * (th0=0 untextured); object.luma = (lumaword>>23)&0xff. */
-#define GEO_OP_DIRECT   0x01000202u
-#define GEO_OP_TEXDATA  0x02000404u
-#define GEO_TEXRAM_BIT  0x00800000u
-/* direct_data polygon attribute word: quad | linktype 1 | doubleside (== 0x00020101). */
-#define GEO_POLY_QUAD   (1u | (1u << 8) | (1u << 17))
+ * (th0=0 untextured); object.luma = (lumaword>>23)&0xff.
+ * (GEO_OP_DIRECT / GEO_OP_TEXDATA / GEO_TEXRAM_BIT / GEO_POLY_QUAD: m2_constants.h.) */
 
 /* sqrt is shared: m2_sqrtf (m2.h). Kept off the COP deliberately — m2_cop_sqrt can
  * hang the render loop if the COP math FIFO doesn't answer; the C path is correct
@@ -317,9 +299,7 @@ static void geo_flush(u32 read_start) {
  * the committed buffer while the i960 fills the next, so it never parses a
  * half-built list (which a single fixed buffer risks). STF's 0xf0f write to the
  * END register is just the END opcode (0x07800f0f) — already our geo_end() word. */
-#define GEO_CTL_REG     0x0098000Cu   /* STF clears this in geo_initialize        */
-#define GEO_WRITE_REG   0x00801008u   /* geo_write_start  (g10+0x1008)            */
-#define GEO_ZCLIP_REG   0x0181C000u   /* _3D_ZCLIP_START                          */
+/* GEO_CTL_REG / GEO_WRITE_REG / GEO_ZCLIP_REG: m2_constants.h (the hardware map). */
 #define GEO_NBUF        4u
 static const u32 geo_buf_off[GEO_NBUF] = { 0x00000u, 0x08000u, 0x10000u, 0x18000u };
 static u32 g_geo_buf;                  /* current build buffer (0..3)             */
@@ -385,7 +365,7 @@ static void geo_initialize(void) {
         buf = GEO_BUFFERRAM + geo_buf_off[r9];
         *(volatile u32 *)GEO_WRITE_REG = buf;             /* GEO_WRITE = this buffer        */
         g10[0] = 0u; g10[0] = 0u; g10[0] = 0u;            /* slot 0x0 x3 (empty list head)  */
-        m2_geo_cmd(0x0F0u);       /* slot 0xF0 = end-mark command   */
+        m2_geo_cmd(GEO_SLOT_ENDMARK);
     }
     buf = GEO_BUFFERRAM + geo_buf_off[3];                 /* buffer 3                       */
     M2_MEM.buff_add = buf;                                /* current DL buffer = buffer 3   */
@@ -425,9 +405,9 @@ static const u32 geo_buff_ram_adds[GEO_NBUF] = {
     0x900000u, 0x908000u, 0x910000u, 0x918000u    /* STF BUFF_RAM_ADDS */
 };
 
-/* STF change_poly_bank @0x3534: cache the COP poly bank (low byte of 0x98000C). */
+/* STF change_poly_bank @0x3534: cache the COP poly bank (low byte of GEO_CTL_REG). */
 static void change_poly_bank(void) {
-    M2_MEM.poly_bank = (u8)(*(volatile u32 *)0x0098000Cu);
+    M2_MEM.poly_bank = (u8)(*(volatile u32 *)GEO_CTL_REG);
 }
 
 /* STF interrupt_wait @0x1768: spin until M2_MEM.vsync >= 2 with bit0 clear (two
@@ -443,11 +423,11 @@ static void geo_interrupt_wait(void) {
  * next buffer (g10+0x1008). (BUFF_MAX usage tracking omitted - pure diagnostic.) */
 static void geo_set_end_mark(void) {
     u32 prev = M2_MEM.buff_add;
-    m2_geo_cmd(0x0F0u);
-    *(volatile u32 *)0x00803008u = prev;
+    m2_geo_cmd(GEO_SLOT_ENDMARK);
+    *(volatile u32 *)GEO_READ_REG = prev;
     M2_MEM.buff_index = (u8)((M2_MEM.buff_index + 1u) & 3u);
     M2_MEM.buff_add  = geo_buff_ram_adds[M2_MEM.buff_index];
-    *(volatile u32 *)0x00801008u = M2_MEM.buff_add;
+    *(volatile u32 *)GEO_WRITE_REG = M2_MEM.buff_add;
 }
 
 /* ---- FRAME ORCHESTRATION (the begin/commit the draw primitives need) -----------------------------
@@ -472,14 +452,14 @@ static void geo_set_end_mark(void) {
 /* STF set_mmode (event_loop @0x113B0 pushes set_mmode(3) then set_mmode(1) at the top of every frame):
  * slot 0x70 = 0x707, then push the mode word to the GEO FIFO. */
 static void m2_geo_set_mmode(u32 v) {
-    m2_geo_cmd(0x070u);
-    *(volatile u32 *)0x00804000u = v;
+    m2_geo_cmd(GEO_SLOT_MMODE);
+    M2_GEOFIFO = v;
 }
 /* STF set_window_data @0x35E0 (main_loop calls it every frame): slot 0x80 = 0x808, then push the
- * Z-clip word (0x40800000) to the GEO FIFO — the per-frame slot-0x80 render-state. */
+ * Z-clip word (4.0f) to the GEO FIFO — the per-frame slot-0x80 render-state. */
 static void m2_geo_set_window(void) {
-    m2_geo_cmd(0x080u);
-    *(volatile u32 *)0x00804000u = 0x40800000u;
+    m2_geo_cmd(GEO_SLOT_ZMODE);
+    m2_geo_pf(4.0f);        /* 0x40800000 */
 }
 
 /* Begin a frame: reset the COP poly counters ONCE per frame (so multiple object submits thread their
@@ -500,15 +480,15 @@ static void m2_frame_end(void) { geo_set_end_mark(); geo_interrupt_wait(); }
  * ((g10)[g12], g10=0x800000 g12=0x4000), then end-mark + interrupt_wait. The 4-short
  * pattern is pushed 1024x (count 0x1000). */
 static void geo_region_fill(const u16 pat[4], u32 region) {
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     int i;
-    m2_geo_cmd(0x040u);        /* g10+0x40   */
+    m2_geo_cmd(GEO_SLOT_TABLE40);
     *fifo = region;                                /* region addr */
     *fifo = 0x1000u;                               /* count       */
     for (i = 0; i < 1024; i++) {
         *fifo = pat[0]; *fifo = pat[1]; *fifo = pat[2]; *fifo = pat[3];
     }
-    m2_geo_cmd(0x100u);        /* g10+0x100 = 0x1010 (lda 0x1010) */
+    m2_geo_cmd(GEO_SLOT_COMMIT);   /* = 0x1010 -> slot 0x100 (lda 0x1010 in STF) */
     *fifo = pat[0];                                /* final short */
     geo_set_end_mark();
     geo_interrupt_wait();
@@ -550,16 +530,16 @@ static const u32 geo_mat_int[0x20] = {  /* flt_90BA0 */
     0x3B7F9724u,0x3B4B295Fu,0x3B23D70Au,0x3AF9096Cu,0x3AC49BA6u,0x3A9D4952u,0x3A83126Fu,0x3A378034u
 };
 static void geo_material_init(void) {
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     u32 last = 0u; int i;
-    m2_geo_cmd(0x060u);     /* slot 0x60 = material/luma opcode (0x606) */
+    m2_geo_cmd(GEO_SLOT_MATERIAL);
     *fifo = 0u;                                 /* base  = 0    */
     *fifo = 0x20u;                              /* count = 0x20 records */
     for (i = 0; i < 0x20; i++) {
         *fifo = geo_mat_hdr[i];                 /* material_num_floats[i] (= flt_90A20[i]) */
         *fifo = geo_mat_int[i]; last = geo_mat_int[i];   /* flt_90BA0[i] */
     }
-    m2_geo_cmd(0x100u);     /* config-commit (sub_29148 tail)          */
+    m2_geo_cmd(GEO_SLOT_COMMIT);   /* config-commit (sub_29148 tail)   */
     *fifo = last;
     /* Commit + sync this material block. STF's set_material(0x29148)/sub_290FC(0x290FC) do NOT flush
      * immediately (verified: callers @0x6A94 + camera_init @0x1F554 fall straight through, no

@@ -16,63 +16,19 @@
 #ifndef M2_MATH_H
 #define M2_MATH_H
 
-#define M2_COPFIFO (*(volatile u32 *)0x00884000u)
+#include "m2_constants.h"   /* M2_COPFIFO_ADDR + the COP_* command words (the hardware map) */
+
+#define M2_COPFIFO (*(volatile u32 *)M2_COPFIFO_ADDR)
 
 static void  m2_cop(u32 cmd)    { M2_COPFIFO = cmd; }              /* send command  */
 static void  m2_cop_pi(u32 v)   { M2_COPFIFO = v; }               /* push int arg  */
 static void  m2_cop_pf(float f) { union { float f; u32 u; } x; x.f = f; M2_COPFIFO = x.u; }
 static float m2_cop_gf(void)    { union { float f; u32 u; } x; x.u = M2_COPFIFO; return x.f; }
 
-/* Command word from the dispatch-table slot n: the SHARC firmware checks all
- * three byte fields (bits[28:23] | [15:8] | [7:0]), so the word is n in each. */
-#define COP_CMD(n)    (((u32)(n) << 23) | ((u32)(n) << 8) | (u32)(n))
-
-#define COP_PUSH      COP_CMD(0x01)  /* push bone frame                         */
-#define COP_POP       COP_CMD(0x02)  /* pop bone frame                          */
-#define COP_IDENTITY  COP_CMD(0x03)  /* rot = I, T = 0                          */
-#define COP_ANG_X     COP_CMD(0x08)  /* in: 1 i16 angle; post-mul rot by Rx     */
-#define COP_ANG_Y     COP_CMD(0x09)  /* in: 1 i16 angle; post-mul rot by Ry     */
-#define COP_ANG_Z     COP_CMD(0x0A)  /* in: 1 i16 angle; post-mul rot by Rz     */
-#define COP_FADD      COP_CMD(0x13)  /* in: a,b float; out: a+b                 */
-#define COP_FSUB      COP_CMD(0x14)  /* in: a,b float; out: a-b                 */
-#define COP_FMUL      COP_CMD(0x15)  /* in: a,b float; out: a*b                 */
-#define COP_FDIV      COP_CMD(0x16)  /* in: a,b float; out: a/b                 */
-#define COP_INT2F     COP_CMD(0x17)  /* in: int;   out: (float)int              */
-#define COP_F2INT     COP_CMD(0x18)  /* in: float; out: (int)float (truncate)   */
-#define COP_SQRT      COP_CMD(0x1A)  /* in: float; out: float sqrt              */
-#define COP_SIN       COP_CMD(0x21)  /* in: i16 angle; out: float sin           */
-#define COP_COS       COP_CMD(0x22)  /* in: i16 angle; out: float cos           */
-#define COP_M2W       COP_CMD(0x29)  /* in: x,y,z float; out: rot*(x,y,z)+T     */
-#define COP_DIST2D    COP_CMD(0x2B)  /* in: x1,z1,x2,z2; out: sqrt((x2-x1)^2+(z2-z1)^2) */
-#define COP_ATAN2     COP_CMD(0x2F)  /* in: x1,z1,x2,z2; out: i16 atan2(z2-z1,x2-x1) (azimuth) */
-#define COP_WMATRIX   COP_CMD(0x04)  /* in: 12 floats (row-major 3x4) -> bone slot   */
-#define COP_RMATRIX   COP_CMD(0x05)  /* out: 12 floats (row-major 3x4) bone -> FIFO  */
-#define COP_SET_POS   COP_CMD(0x06)  /* in: x,y,z; T += rot*(x,y,z)                  */
-#define COP_SCALE     COP_CMD(0x07)  /* in: sx,sy,sz; rot[col][row] *= s per col     */
-#define COP_SUBMIT    COP_CMD(0x78)  /* polygon_submit: commit the transformed object */
-
-/* ---- extended scalar / vector math (cpres1 handler bodies, disasm-verified) ----
- * These all FIFO round-trip like the wrappers below; none are overridden by
- * m2_fastmath.h (they genuinely need the SHARC). The three marked "no STF opcode"
- * are valid cpres1 handlers the shipping game never emits, but which still run. */
-#define COP_RSQRT     COP_CMD(0x19)  /* in: float; out: 1/sqrt(x) (0 if x<=0)        */
-#define COP_TAN       COP_CMD(0x23)  /* in: i16 angle; out: float tan (sin/cos)      */
-#define COP_SINSCALE  COP_CMD(0x24)  /* in: i16 angle, s; out: sin(angle)*s          */
-#define COP_COSSCALE  COP_CMD(0x25)  /* in: i16 angle, s; out: cos(angle)*s          */
-#define COP_ASIN      COP_CMD(0x26)  /* in: float [-1,1]; out: i16 asin              */
-#define COP_ATAN2F    COP_CMD(0x27)  /* in: x,y float; out: i16 atan2(y,x)           */
-#define COP_DOT3      COP_CMD(0x2A)  /* in: a0,b0,a1,b1,a2,b2; out: a.b  (no STF op) */
-#define COP_DIST3D    COP_CMD(0x2C)  /* in: x1,x2,y1,y2,z1,z2; out: 3D distance      */
-#define COP_MAG2D     COP_CMD(0x2D)  /* in: a,b; out: sqrt(a^2+b^2)                  */
-#define COP_MAG3D     COP_CMD(0x2E)  /* in: a,b,c; out: sqrt(a^2+b^2+c^2) (no STF op)*/
-#define COP_NORM3     COP_CMD(0x30)  /* in: x,y,z; out: unit vector (cpres1; see note)*/
-#define COP_DOT2D     COP_CMD(0x59)  /* in: a,b,c,d; out: a*b+c*d                    */
-#define COP_NORM2     COP_CMD(0x5A)  /* in: x,y; out: unit vector  (cpres1; see note) */
-#define COP_ROT2D     COP_CMD(0x5B)  /* in: i16 angle,x,y; out: rotated x,y (cpres1) */
-#define COP_ADD3      COP_CMD(0x5C)  /* in: a0,b0,a1,b1,a2,b2; out: a+b              */
-#define COP_SUB3      COP_CMD(0x5D)  /* in: a0,b0,a1,b1,a2,b2; out: a-b  (no STF op) */
-#define COP_SCALE3    COP_CMD(0x5E)  /* in: s,x,y,z; out: s*x,s*y,s*z                */
-#define COP_W2M       COP_CMD(0x6A)  /* in: x,y,z; out: rot*((x,y,z)-T) world->model */
+/* The COP_CMD(n) encoding + the full COP_* opcode table (with per-op in/out semantics)
+ * moved to m2_constants.h — the hardware map. The wrappers below are the API over them.
+ * (The COP_NORM3/NORM2/ROT2D "see note" pointer resolves to the divergence note above
+ * m2_cop_norm3 below: those indices differ between cpres1 silicon and MAME's HLE COP.) */
 
 #define M2_ANG_SCALE  10430.378f    /* radians -> i16 angle (65536 / 2pi)      */
 static u32 m2_ang(float radians) { return (u32)((int)(radians * M2_ANG_SCALE)) & 0xffffu; }

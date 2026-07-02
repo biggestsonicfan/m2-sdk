@@ -70,7 +70,7 @@ static void m2_obj_fill_patch(void) {
 /* Write a flat-colour texture header for colorbase cb into texture_ram (slot cb*4), sampling the
  * patch. Reference it from a submit via tha = 0x00800000 | (cb*4). Emit before the quad that uses it. */
 static void m2_obj_color_header(u32 cb) {
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     *fifo = GEO_OP_TEXDATA;
     *fifo = GEO_TEXRAM_BIT | (cb * 4u);         /* dest = texram header slot cb*4 */
     *fifo = 4u;                                 /* 4 header words */
@@ -82,10 +82,10 @@ static void m2_obj_color_header(u32 cb) {
  * GEO render state (FOCAL/LIGHT/WINDOW/TEXPARAM/LOD) + the STF poly_test_camera BASIS+VIEWPORT
  * preamble (drained per op or the COP output FIFO fills and stalls before a submit). */
 static void m2_obj_frame_setup(void) {
-    volatile u32 *cf   = (volatile u32 *)0x00884000u;            /* COP FIFO */
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;            /* GEO FIFO */
+    volatile u32 *cf   = (volatile u32 *)M2_COPFIFO_ADDR;        /* COP FIFO */
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;        /* GEO FIFO */
     m2_cam_geo_proj();                                           /* GEO FOCAL slot 0x90 */
-    m2_geo_fifo_light(0x3F3504EDu, 0xBF2F9844u, 0x3E2FEF42u);    /* slot 0xA0 LIGHT */
+    m2_geo_fifo_light(STF_LIGHT_X_BITS, STF_LIGHT_Y_BITS, STF_LIGHT_Z_BITS);
     m2_geo_fifo_window_full();                                   /* WINDOW + clip   */
     m2_geo_fifo_texparam(0x000060FFu);                           /* TEXPARAM table  */
     *fifo = GEO_OP_LOD; *fifo = geo__f(2560.0f);                 /* base mip 2560.0 */
@@ -98,7 +98,7 @@ static void m2_obj_frame_setup(void) {
  * 456); 0 = use the model's own. */
 static void m2_obj_submit(u32 model_no, u32 tha_override, u32 px, u32 py, u32 pz,
                           u32 ax, u32 ay, u32 az, u32 sxb, u32 syb, u32 szb) {
-    volatile u32 *cf = (volatile u32 *)0x00884000u;
+    volatile u32 *cf = (volatile u32 *)M2_COPFIFO_ADDR;
     volatile const u32 *hdr = (volatile const u32 *)(M2_MODEL_TABLE + model_no * 16u);
     u32 tha = tha_override ? tha_override : hdr[1];
     *cf = COP_IDENTITY;                                          /* set_identity */
@@ -109,14 +109,14 @@ static void m2_obj_submit(u32 model_no, u32 tha_override, u32 px, u32 py, u32 pz
     *cf = COP_SCALE; *cf = sxb; *cf = syb; *cf = szb;            /* per-axis scale */
     *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;              /* fadd x3 fence */
     cop_drain(cf, 1u);
-    { u32 wr = *(volatile u32 *)0x00802008u;                     /* COP_WPOS */
-      *(volatile u32 *)0x00801008u = wr + 0x48u;                 /* GEO_WRITE = COP_WPOS + 0x48 */
+    { u32 wr = *(volatile u32 *)COP_WPOS_REG;
+      *(volatile u32 *)GEO_WRITE_REG = wr + 0x48u;               /* GEO_WRITE = COP_WPOS + 0x48 */
       *cf = COP_SUBMIT; *cf = wr; *cf = 0u;                      /* polygon_submit (op 0x78) */
       *cf = hdr[0]; *cf = tha; *cf = hdr[2]; *cf = hdr[3];       /* tpa / tha(maybe override) / oba / obc */
       *cf = g_cop_p2; *cf = g_cop_p;                             /* P2_POLYGON, POLYGON (running) */
       g_cop_p2 = *cf; g_cop_p = *cf;                             /* read back + save */
-      { u32 ep = *(volatile u32 *)0x00802008u;                   /* GEO END mark */
-        *(volatile u32 *)(0x00900000u + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
+      { u32 ep = *(volatile u32 *)COP_WPOS_REG;                  /* GEO END mark */
+        *(volatile u32 *)(GEO_BUFFERRAM + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
 }
 
 /* Convenience: one flat-colour quad (model 456) of colorbase cb (colour = palram[cb+0x1000]). Writes

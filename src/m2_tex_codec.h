@@ -14,6 +14,8 @@
 #ifndef M2_TEX_CODEC_H
 #define M2_TEX_CODEC_H
 
+#include "m2_constants.h"   /* TEXRAM_0_1 / TEXRAM_1 (the hardware map) */
+
 #define TEX_CLASSIFY_ROM 0x02300010u          /* 256 u32 symbol-classify LUT (ROM) */
 
 /* ---- scratch buffers (kernel .bss) ---- */
@@ -143,10 +145,7 @@ static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
                  * br.r13 read + nw sign test), making the walk resolve to the wrong
                  * leaf -> every code >8 bits decodes as a literal. This barrier forces
                  * nw/bit/g3 to materialize each iteration. Do NOT remove. */
-                /* gcc960 (gcc 2.x) has no "+r" read-write modifier; express it as matched
-                 * "=r" outputs with "0"/"1"/"2" tied inputs (same materialize-each-iter barrier). */
-                __asm__ __volatile__("" : "=r"(nw), "=r"(bit), "=r"(g3)
-                                       : "0"(nw), "1"(bit), "2"(g3) : "memory");
+                __asm__ __volatile__("" : "+r"(nw), "+r"(bit), "+r"(g3) : : "memory");
                 if (bit) { if (nw >= 0) { g3 = (u32)nw; continue; } else { g4 = nw; break; } }
                 else     { if (nw >= 0) { g3 = g3 + 4;  continue; } else { g4 = nw; break; } }
             }
@@ -206,11 +205,9 @@ static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
             for (;;) {
                 n--;
                 if (g2 == (u16)term) {                  /* run */
-                    u16 g1 = g_texRLE[si]; u8 rsh = g_texRLEsh[si];
-                    u16 val; int rl, k;                  /* gcc960 C89: all decls before stmts */
-                    si++;
-                    val = (g1 >> 8) & 0xFF; val |= (val << 8);
-                    rl = g1 & 0xFF;
+                    u16 g1 = g_texRLE[si]; u8 rsh = g_texRLEsh[si]; si++;
+                    u16 val = (g1 >> 8) & 0xFF; val |= (val << 8);
+                    int rl = g1 & 0xFF, k;
                     n += 1; n -= rl;
                     for (k = 0; k < (rl >= 1 ? rl : 1); k++) { *dst++ = val; *shd++ = rsh; }
                     shc = g_texRLEsh[si]; g2 = g_texRLE[si]; si++;
@@ -238,8 +235,12 @@ static int tex_decode_page(u32 src_addr, volatile u16 *sheet) {
  * and its own compressed DATA block pointer. Per tile: decode LOD0 to its sheet dest, then build a
  * mip pyramid into the +0xC0000 mip region (the model-1 faces sample MIP levels, not LOD0). */
 
-#define TEXRAM_0_1 0x11100000u
-#define TEXRAM_1   0x11300000u
+/* TEXRAM_0_1 / TEXRAM_1 sheet banks: m2_constants.h (the hardware map). */
+
+/* STF data-ROM cells holding the texture-page table pointers (the send_tex_* walk
+ * dereferences these at runtime; the tables themselves live wherever the ROM says). */
+#define STF_TEX_HDR_TABLE_PTR  0x0230000Cu  /* -> per-page HDR block table  */
+#define STF_TEX_DATA_TABLE_PTR 0x02300008u  /* -> compressed DATA block table */
 
 /* word_4B394 @0x4B394: 24 (texx,texy) tile-origin pairs (validated). */
 static const u16 g_tex_lutx[24] = {0,256,512,768, 0,256,512,768, 0,256,512,768,
@@ -299,8 +300,8 @@ static void tex_build_mips(const u32 mip[10]) {
 /* Walk a page's descriptor and load every tile (LOD0 + mips) to its placed dest.
  * mode = the request-slot mode word r7 (parity = (g2 ^ mode) & 1). */
 static void tex_load_atlas(u32 page, u32 mode) {
-    u32 HDR_TABLE = *(volatile u32 *)0x0230000Cu;
-    u32 DATA_TABLE = *(volatile u32 *)0x02300008u;
+    u32 HDR_TABLE = *(volatile u32 *)STF_TEX_HDR_TABLE_PTR;
+    u32 DATA_TABLE = *(volatile u32 *)STF_TEX_DATA_TABLE_PTR;
     u32 P = *(volatile u32 *)(HDR_TABLE + page * 4u);     /* page HDR block */
     u32 s = *(volatile u32 *)P;                           /* sub-index into DATA_TABLE */
     const volatile u32 *dptr = (const volatile u32 *)(P + 4u);   /* per-tile DATA block ptrs */

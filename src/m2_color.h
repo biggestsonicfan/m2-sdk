@@ -12,9 +12,8 @@
 #ifndef M2_COLOR_H
 #define M2_COLOR_H
 
-#define M2_PALRAM    0x01800000u
-#define M2_COLORXLAT 0x01810000u   /* R @+0x0000, G @+0x4000, B @+0x8000 (u16)   */
-#define M2_LUMARAM   0x11400000u
+#include "m2_constants.h"   /* M2_PALRAM / M2_COLORXLAT / M2_LUMARAM (the hardware map) */
+
 #define M2_ROM_LUMA_BLOCKS 0x020d0008u   /* STF data ROM: luma block count        */
 #define M2_ROM_LUMA_SRC    0x020d000cu   /* STF data ROM: luma byte ramp           */
 

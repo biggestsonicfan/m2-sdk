@@ -16,6 +16,7 @@
 #ifndef M2_3D_H
 #define M2_3D_H
 
+#include "m2_constants.h" /* the hardware map: coprocessor regs, FIFO addrs, GEO slots/opcodes */
 #include "cpres1.h"    /* const unsigned short cpres_data[]  — bin2c'd cpres1 (COP) firmware */
 #include "cpres2.h"    /* const unsigned short cpres_data2[] — bin2c'd cpres2 (GEO) firmware */
 #include "m2_math.h"   /* COP command FIFO + COP_* opcodes + scalar/vector/matrix math (+ fastmath override) */
@@ -30,11 +31,11 @@ static void m2__copro_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
     u32 save = *ctl;
     int i;
     *ctl = save | 0x80000000u;                              /* halt + count=0   */
-    /* Release the coprocessors from reset (clear bits 0,1 of 0x980020). The real
-     * firmware's b_crx_copro_down / copro_down2 do this; 0x980020 is NOT mapped in
+    /* Release the coprocessors from reset (clear bits 0,1 of COPRO_RESET_REG). The real
+     * firmware's b_crx_copro_down / copro_down2 do this; the reg is NOT mapped in
      * MAME (so the HLE never needed it), but on real silicon the SHARC stays held
      * in reset without it -> streaming firmware + triggering the GEO then faults. */
-    *(volatile u32 *)0x00980020u = *(volatile u32 *)0x00980020u & 0xFFFFFFFCu;
+    *(volatile u32 *)COPRO_RESET_REG = *(volatile u32 *)COPRO_RESET_REG & 0xFFFFFFFCu;
     *(volatile u32 *)(iop_base + 0x000) = syscon0;          /* SYSCON           */
     *(volatile u32 *)(iop_base + 0x000) = 0;
     *(volatile u32 *)(iop_base + 0x008) = dmacfg;
@@ -51,7 +52,7 @@ static void m2__copro_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
 
 /* cpres1 = COP / math (the SHARC MAME emulates; verified PC reaches 0x2013F). */
 static void m2_cop_boot(void) {
-    m2__copro_upload(0x00980000u, 0x008C0000u, 0x00884000u,
+    m2__copro_upload(COP_CTL_REG, COP_IOP_BASE, M2_COPFIFO_ADDR,
                      cpres_data, 14862, 0xA100, 0xA110, 0xC9400, 4954);
 }
 
@@ -71,7 +72,7 @@ static void m2__geo_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
     u32 save = *ctl;
     int i;
     *ctl = save | 0x80000000u;                                   /* halt (setbit 0x1F)      */
-    *(volatile u32 *)0x00980020u = *(volatile u32 *)0x00980020u & 0xFFFFFFFCu;  /* release reset */
+    *(volatile u32 *)COPRO_RESET_REG = *(volatile u32 *)COPRO_RESET_REG & 0xFFFFFFFCu;  /* release reset */
     *(volatile u32 *)(iop_base + 0x000) = syscon0;
     *(volatile u32 *)(iop_base + 0x000) = 0;
     *(volatile u32 *)(iop_base + 0x008) = dmacfg;
@@ -99,7 +100,7 @@ static void m2_geo_boot(void) {
      * so header[2] = 0x1, NOT 0. copro_down2 writes 0x840104 = 0x1. A previous misread set this to
      * 0 -> DMA stride 0 -> the GEO can't walk BUFF_RAM (GEO_RADDR pinned at 0, stripe field, no
      * render); peek/MAME(HLE) can't see it. The COP boot hardcodes 0x104=1 and works -> match it. */
-    m2__geo_upload(0x00980008u, 0x00840000u, 0x00804000u,
+    m2__geo_upload(GEO_BOOT_CTL_REG, GEO_IOP_BASE, M2_GEOFIFO_ADDR,
                    cpres_data2, 9351, 0x3100, 0x3110, 0xC400, 3117, /*hdr104=*/1u);
 }
 
@@ -117,8 +118,8 @@ static void m2_3d_boot(void) {
  * transformed geometry (the GEO side can be fully set up yet nothing renders). The geoserial kernel does
  * this as cop_arm(); it was missing from the SDK, so standalone object_data builds skipped it. */
 static void m2_cop_initialize(void) {
-    volatile u32 *cop_ctl  = (volatile u32 *)0x00980004u;
-    volatile u32 *cop_fifo = (volatile u32 *)0x00884000u;
+    volatile u32 *cop_ctl  = (volatile u32 *)COP_STATUS_REG;
+    volatile u32 *cop_fifo = (volatile u32 *)M2_COPFIFO_ADDR;
     u32 g = 0;
     while (!(*cop_ctl & 1u) && ++g < 200000u) (void)*cop_fifo;
     *cop_fifo = 0u;
@@ -175,8 +176,8 @@ static void cop_submit_object(volatile u32 *cf, const volatile u32 *hdr) {
     *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;           /* fadd x3 fence */
     s = *cf;                                                  /* 1 sync read */
     *cf = COP_SUBMIT;                                         /* polygon_submit (op 0x78) */
-    wr = *(volatile u32 *)0x00802008u;                        /* COP_WPOS */
-    *(volatile u32 *)0x00801008u = wr + 0x48u;                /* GEO_WRITE = COP_WPOS + 0x48 (reserve) */
+    wr = *(volatile u32 *)COP_WPOS_REG;
+    *(volatile u32 *)GEO_WRITE_REG = wr + 0x48u;              /* GEO_WRITE = COP_WPOS + 0x48 (reserve) */
     *cf = wr; *cf = 0u;
     *cf = hdr[0]; *cf = hdr[1]; *cf = hdr[2]; *cf = hdr[3];   /* raw model header (obc too big HANGS the COP) */
     *cf = g_cop_p2; *cf = g_cop_p;                            /* P2_POLYGON, POLYGON (running) */
@@ -263,7 +264,7 @@ static void m2_cam_world_to_view(const float p[3], float out[3]) {
 
 /* GEO command FIFO + slot-register window (g10 = 0x800000 base, FIFO @ +0x4000). */
 #define M2_GEO_SLOT(n)  (*(volatile u32 *)(0x00800000u + (u32)(n)))
-#define M2_GEOFIFO      (*(volatile u32 *)0x00804000u)
+#define M2_GEOFIFO      (*(volatile u32 *)M2_GEOFIFO_ADDR)
 static void m2_geo_pf(float f) { union { float f; u32 u; } x; x.f = f; M2_GEOFIFO = x.u; }
 
 /* Emit a GEO slot-register command header. The slot's command word is (slot>>4)*0x101
@@ -271,16 +272,16 @@ static void m2_geo_pf(float f) { union { float f; u32 u; } x; x.f = f; M2_GEOFIF
  * FIFO. NB this is the command form only — writing a non-encoding value to a slot (e.g.
  * M2_GEO_END = buffer offset) is a data write, not a command, and stays explicit. */
 static void m2_geo_cmd(u32 slot) { M2_GEO_SLOT(slot) = ((slot >> 4) & 0xFFu) * 0x101u; }
+/* (The GEO_SLOT_* slot-number table lives in m2_constants.h with the rest of the hardware map.) */
 
 /* Per-frame GEO projection feed (camera_init :30836): FOCAL setup slot 0x90 = 0x909, then
  * the focal_x / focal_y pair. Call once per frame before submitting objects. */
 static void m2_cam_geo_proj(void) {
-    m2_geo_cmd(0x90u);
+    m2_geo_cmd(GEO_SLOT_FOCAL);
     m2_geo_pf(m2_cam.focus);
     m2_geo_pf(m2_cam.focus);
 }
 
-/* Master Z-clip control register (write 0xFF to disable board-level near clip). */
-#define ZCLIP_REG  0x0181C000u
+/* ZCLIP_REG / GEO_ZCLIP_REG (0x0181C000) moved to m2_constants.h. */
 
 #endif /* M2_3D_H */

@@ -80,18 +80,24 @@ static void m2_set_luma(u32 l) { m2_draw_luma = l & 0xFFu; }
  * m2_frame_begin(), so this ~70-word prelude is NOT re-sent per primitive. (Re-sending it per quad
  * was the old smoothness/perf killer: a dashed line of N quads paid N preludes.) Prelude from
  * app_directtest, proven to reach the rasterizer. */
+/* DIRECT-path light vector — a SEPARATE live capture (app_directtest) from the object-path
+ * STF_LIGHT_*_BITS (m2_geo.h). Captured bit patterns, not re-derivable from decimal floats.
+ * Decodes to approximately (0.7062, -0.6930, 0.1450). */
+#define M2_DRAW_LIGHT_X_BITS 0x3F34CA6Eu
+#define M2_DRAW_LIGHT_Y_BITS 0xBF3167ABu
+#define M2_DRAW_LIGHT_Z_BITS 0x3E147F30u
 static void m2_draw_frame_setup(void) {
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
-    m2_geo_cmd(0x080u); *fifo = m2__fb(4.0f);                        /* ZSORT granularity (coarse) */
-    m2_geo_cmd(0x090u); *fifo = m2__fb(280.0f); *fifo = m2__fb(280.0f); /* FOCAL distance */
-    m2_geo_fifo_light(0x3F34CA6Eu, 0xBF3167ABu, 0x3E147F30u);
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
+    m2_geo_cmd(GEO_SLOT_ZMODE); *fifo = m2__fb(4.0f);                /* ZSORT granularity (coarse) */
+    m2_geo_cmd(GEO_SLOT_FOCAL); *fifo = m2__fb(280.0f); *fifo = m2__fb(280.0f);
+    m2_geo_fifo_light(M2_DRAW_LIGHT_X_BITS, M2_DRAW_LIGHT_Y_BITS, M2_DRAW_LIGHT_Z_BITS);
     m2_geo_fifo_window_full();
     m2_geo_fifo_texparam(0x000010FFu);
 }
 
 /* flat-colour DIRECT quad over screen rect (x,y,w,h), colorbase cb, depth pz. */
 static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz) {
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     u32 tha = GEO_TEXRAM_BIT | (cb * 4u), zf = m2__fb(pz);
     float l = (x - 248.0f) * pz,  r = ((x + w) - 248.0f) * pz;
     float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
@@ -115,12 +121,20 @@ static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz)
  * textured+translucent + the tile dims. UV sub-rect lets glyphs (8x8 at sub-tile offsets) index a tile
  * whose origin is 32px-granular. NOTE: the UV TEXDATA write needs the 0x800000 texture_ram select bit
  * (same as the header) — without it the UVs never land and the renderer reads stale config = arcs. */
+/* Per-glyph UV slot rotation. On silicon the GEO reads the tpa (UV) slot at RASTER time (pipelined),
+ * so if every glyph writes its UV sub-rect to ONE shared slot they all sample the LAST glyph's UV
+ * (the '9' bug seen on hardware). Give each glyph its OWN UV slot — 16 slots at 0x200 + i*0x10 (each
+ * an 8-word UV, 16 words apart so no overlap; high enough to miss the cb*4 header slots apps use),
+ * wrapping every 16 (pipeline depth < 16). The COP glyph path (m2_text.h m2__next_slot) does the same,
+ * which is our proof rotation carries per-glyph UVs correctly on real hardware. */
+static u32 m2__guv_i = 0u;
+static u32 m2__guv_slot(void) { u32 s = 0x200u + (m2__guv_i & 15u) * 0x10u; m2__guv_i++; return s; }
+
 static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float pz, u32 th0,
-                               u32 texx, u32 texy, u32 u0, u32 v0, u32 uw, u32 vh) {
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;
+                               u32 texx, u32 texy, u32 u0, u32 v0, u32 uw, u32 vh, u32 uvoff) {
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     u32 tha = GEO_TEXRAM_BIT | (cb * 4u), zf = m2__fb(pz);
     u32 th2 = ((texx / 32u) & 0x3fu) | (((texy / 32u) & 0x1fu) << 6);
-    u32 uvoff = 0x40u;
     u32 pu0 = u0 << 3, pv0 = v0 << 3, pu1 = (u0 + uw) << 3, pv1 = (v0 + vh) << 3;
     float l = (x - 248.0f) * pz,  r = ((x + w) - 248.0f) * pz;
     float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
@@ -154,7 +168,9 @@ static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float
 /* full-tile textured quad (UV 0..tw, 0..th). */
 static void m2_direct_tquad(float x, float y, float w, float h, u32 cb, float pz,
                             u32 th0, u32 texx, u32 texy, u32 tw, u32 th) {
-    m2_direct_tquad_uv(x, y, w, h, cb, pz, th0, texx, texy, 0u, 0u, tw, th);
+    /* full-tile (disc/fill): every instance samples the SAME full-tile UV, so a fixed slot (0x40) is
+     * fine — no per-instance UV to clobber. Only glyphs (distinct sub-rects) need the rotation. */
+    m2_direct_tquad_uv(x, y, w, h, cb, pz, th0, texx, texy, 0u, 0u, tw, th, 0x40u);
 }
 
 static void m2_fill_ellipse(float cx, float cy, float rx, float ry, u32 cb) {
@@ -207,7 +223,7 @@ static void m2_draw_glyph_px(float px, float py, float sz, u32 cb, u32 c) {
     u32 ax = (c & 15u) * 8u, ay = ((c >> 4) & 7u) * 8u;   /* glyph cell in the 128x64 (16x8) atlas */
     m2_font_atlas();
     /* th0=0x600A: textured(bit14)+translucent(bit13) + 128 wide (wbits=2) + 64 tall (hbits=1). */
-    m2_direct_tquad_uv(px, py, sz, sz, cb, m2_text_z, 0x600Au, 0u, 0u, ax, ay, 8u, 8u);
+    m2_direct_tquad_uv(px, py, sz, sz, cb, m2_text_z, 0x600Au, 0u, 0u, ax, ay, 8u, 8u, m2__guv_slot());
 }
 
 /* NUL-terminated string from screen pixel (px,py) top-left, sz px/glyph cell, ink colorbase cb. */
@@ -219,6 +235,25 @@ static void m2_draw_text_px(float px, float py, float sz, u32 cb, const char *s)
         if (c != 32u) m2_draw_glyph_px(x, py, sz, cb, c);
         x += adv;
     }
+}
+
+/* OPTIONAL text edge/outline: draw the string in edge_cb offset in 8 directions at radius 1..thick,
+ * one z-LAYER behind, then the ink on top -> the offset copies ring each stroke. thick<=0 => plain
+ * text (no edge). NOTE budget: each radius ring adds 8x the glyph-quads, so keep thick*len modest
+ * (the DIRECT path caps ~160 glyph-quads/frame before the command buffer overflows -> blank frame). */
+static void m2_draw_text_px_o(float px, float py, float sz, u32 ink_cb, u32 edge_cb, float thick,
+                              const char *s) {
+    static const float DX[8] = {-1,0,1,-1,1,-1,0,1}, DY[8] = {-1,-1,-1,0,0,1,1,1};
+    int t = (int)(thick + 0.5f), r, d;
+    if (t > 0) {
+        float z = m2_text_z;
+        m2_text_z = z + 1.0f;                                   /* edge one layer BEHIND the ink */
+        for (r = 1; r <= t; r++)
+            for (d = 0; d < 8; d++)
+                m2_draw_text_px(px + DX[d] * (float)r, py + DY[d] * (float)r, sz, edge_cb, s);
+        m2_text_z = z;
+    }
+    m2_draw_text_px(px, py, sz, ink_cb, s);                     /* ink in front */
 }
 
 #endif /* M2_DRAW_H */

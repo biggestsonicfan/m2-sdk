@@ -47,8 +47,8 @@ static float m2_text_advance = 12.5f;
  * face the camera) with the font-atlas header + the glyph's UV rect (V & U flipped to read upright).
  * Call inside a GEO frame, with the camera already aimed; commit after. */
 static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32 c) {
-    volatile u32 *cf   = (volatile u32 *)0x00884000u;   /* COP FIFO */
-    volatile u32 *fifo = (volatile u32 *)0x00804000u;   /* GEO command FIFO */
+    volatile u32 *cf   = (volatile u32 *)M2_COPFIFO_ADDR;   /* COP FIFO */
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;   /* GEO command FIFO */
     u32 ax = (c & 15u) * 8u, ay = ((c >> 4) & 7u) * 8u;  /* glyph rect in the 128x64 atlas */
     union { float f; u32 u; } sc; sc.f = scale;
     u32 hdr[4];
@@ -94,9 +94,12 @@ static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32
       hdr[2] = g_flatquad;                            /* oba = model 456  */
       hdr[3] = 0x200u;                                /* obc bound        */
       cop_submit_object(cf, hdr);
-      *cf = GEO_OP_DIRECT;                            /* DIRECT flush */
-      { u32 ep = *(volatile u32 *)0x00802008u;
-        *(volatile u32 *)(0x00900000u + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
+      /* STF "DIRECT" flush = COP command 0x02, which POPs the OBJECT bone frame pushed
+       * above. (Same 0x01000202 bit pattern as the GEO's GEO_OP_DIRECT — the COP and GEO
+       * share the (n<<23)|(n<<8)|n encoding — but this is a COP-FIFO write: name the COP op.) */
+      *cf = COP_POP;
+      { u32 ep = *(volatile u32 *)COP_WPOS_REG;
+        *(volatile u32 *)(GEO_BUFFERRAM + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
 }
 
 /* Draw a NUL-terminated string from world (wx,wy,wz): one glyph per char, advancing world-x by
