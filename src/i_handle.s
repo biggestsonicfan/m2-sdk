@@ -62,6 +62,43 @@ _irq_vblank:
 	addi    1, g0, g0
 	st		g0, _RAMBASE_START		# RAMBASE_START++ (STF VsyncScr; interrupt_wait spins on it)
 
+	# ---- BREAK-IN: abort a running/hung app back to the monitor (m2_fault.h m2_break_t
+	# @0x5F0020). Gated on `armed` so the boot/manager fast-path is unaffected. Triggers:
+	# `request` (host writes 1 -> bridge-pokeable) OR the SERVICE button (IN0 bit2, low).
+	# On abort: ack, count++, pivot to recover_sp, branch to recover_fn (never returns).
+	# Only r3-r7/r13 + g0 are used; r3 (scratch-frame base) is re-derived in vbl_restore.
+	lda     0x005F0020, r4			# m2_break
+	ld      (r4), r5				# armed?
+	cmpobe  0, r5, vbl_restore		# not armed -> normal return (no app running)
+	ld      4(r4), r5				# request set (host)?
+	cmpobne 0, r5, vbl_break
+	lda     0x01C00000, r6			# else poll SERVICE (IN0 bit2, active-low)
+	mov     0, g0					# bank register is WRITE-only; the SDK input helpers
+	stob    g0, (r6)				# set bank=0 before every read, so leaving it 0 is safe
+	ldob    2(r6), g0				# read IN0 (system inputs)
+	bbc     2, g0, vbl_break		# bit2 (SERVICE) clear = pressed -> abort
+	b       vbl_restore
+
+vbl_break:
+	lda     0x00e80000, r4			# ack the vblank irq (we won't reach the normal ack)
+	subo    2, 0, r5
+	st      r5, (r4)
+	lda     0x005F0020, r4			# m2_break
+	ld      16(r4), r5
+	addi    1, r5, r5
+	st      r5, 16(r4)				# break count++
+	mov     0, r5
+	st      r5, 4(r4)				# clear request
+	flushreg					# spill the register cache before re-basing the stack
+	mov     0, pfp					# terminate the frame chain
+	ld      12(r4), r13				# recover_sp (fresh frame base)
+	mov     r13, fp
+	lda     64(r13), sp				# sp = fp + 64
+	mov     0, g14					# C ABI (the kx_init `b _main` pattern)
+	ld      8(r4), r6				# recover_fn
+	bx      (r6)					# -> gs_break_recover (never returns)
+
+vbl_restore:
 	lda     -64(sp), r3
 	ldq     48(r3), g12
 	ldq     32(r3), g8

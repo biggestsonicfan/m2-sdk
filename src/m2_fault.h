@@ -92,4 +92,39 @@ static void m2_fault_arm(void (*fn)(void), u32 stack_base) {
  * CPU fault dispatch — the MAME-testable path; real faults join at the same handler. */
 extern void fault_selftest(void);
 
+/* ---- BREAK-IN: the monitor's ^C (abort a running/hung app) --------------------------
+ * The vblank ISR (i_handle.s) runs every frame regardless of what the app does, so it
+ * can abort even a non-polling `while(1)` app. When `armed` (an app is running), the ISR
+ * aborts if EITHER trigger fires: `request` (a host writes 1 — bridge-pokeable, the
+ * MAME-testable path AND the silicon host path once an RX IRQ exists) OR the SERVICE
+ * button (IN0 bit2 active-low — the silicon operator trigger). On abort it pivots to
+ * `recover_sp` and branches to `recover_fn` (gs_break_recover) — the same fresh-stack
+ * re-entry the fault handler uses. FIXED @0x5F0020; i_handle.s reads these offsets in asm. */
+typedef struct {
+    u32 armed;       /* +0  nonzero while an app runs (ISR gates the check on this)   */
+    u32 request;     /* +4  host/kernel writes 1 -> abort at the next vblank          */
+    u32 recover_fn;  /* +8  ISR branches here on abort (must not return)              */
+    u32 recover_sp;  /* +12 fresh frame base for the recovery entry                   */
+    u32 count;       /* +16 breaks since cold RAM (post-mortem; survives soft reset)  */
+} m2_break_t;        /* 20 bytes */
+
+#define M2_BREAK_ADDR 0x005F0020u    /* FIXED — i_handle.s reads these offsets in asm */
+#define M2_BREAK      ((volatile m2_break_t *)M2_BREAK_ADDR)
+_Static_assert(__builtin_offsetof(m2_break_t, request)    ==  4, "m2_break_t.request");
+_Static_assert(__builtin_offsetof(m2_break_t, recover_fn) ==  8, "m2_break_t.recover_fn");
+_Static_assert(__builtin_offsetof(m2_break_t, recover_sp) == 12, "m2_break_t.recover_sp");
+_Static_assert(__builtin_offsetof(m2_break_t, count)      == 16, "m2_break_t.count");
+_Static_assert(M2_BREAK_ADDR + sizeof(m2_break_t) <= M2_FAULT_ADDR, "m2_break overruns the fault record");
+
+/* Arm break-in recovery (call once at boot). `armed` stays 0 until an app runs. */
+static void m2_break_arm(void (*fn)(void), u32 stack_base) {
+    M2_BREAK->armed      = 0u;
+    M2_BREAK->request    = 0u;
+    M2_BREAK->count      = 0u;
+    M2_BREAK->recover_sp = stack_base;
+    M2_BREAK->recover_fn = (u32)fn;
+}
+/* Enable/disable the ISR abort check (bracket a running app). */
+static void m2_break_armed(int on) { M2_BREAK->armed = on ? 1u : 0u; }
+
 #endif /* M2_FAULT_H */
