@@ -130,6 +130,36 @@ fault_selftest:
  *    `b _main` pattern) — the monitor survives the fault. Unarmed: halt (legacy). */
 	.align	4
 fault_show:
+	# ---- NINDY register-frame capture (m2_regs @ 0x5F0060; m2_fault.h m2_regs_t) ----
+	# Do this FIRST: g0-g15 are still the faulting code's globals here (fault entry is a
+	# local call, which preserves globals; the per-type handler only touched r4/r5).
+	# The print code below clobbers g0-g15, so snapshot them now using local scratch.
+	# register_set order: r0-15 @+0, g0-15 @+64, pc @+128, ac @+132, ip @+136, tc @+140.
+	lda	0x005F0060, r6		# r6 -> m2_regs
+	stq	g0,  64(r6)		# g0-g3   -> register_set[16..19]
+	stq	g4,  80(r6)		# g4-g7   -> [20..23]
+	stq	g8,  96(r6)		# g8-g11  -> [24..27]
+	stq	g12, 112(r6)		# g12-g15 -> [28..31] (g15 = fp)
+	mov	rip, r7
+	st	r7, 136(r6)		# rip -> register_set[34] = ip (solid)
+	# faulting frame's locals r0-r15 via pfp (NINDY kx faultasm recipe; silicon-pending)
+	flushreg			# make the faulting frame's locals current in memory
+	ldconst	0xfffffff0, r8
+	mov	pfp, r9
+	and	r9, r8, r9		# mask pfp return bits -> faulting frame base
+	ldq	0(r9),  r12
+	stq	r12, 0(r6)		# r0-r3
+	ldq	16(r9), r12
+	stq	r12, 16(r6)		# r4-r7
+	ldq	32(r9), r12
+	stq	r12, 32(r6)		# r8-r11
+	ldq	48(r9), r12
+	stq	r12, 48(r6)		# r12-r15
+	mov	0, r12			# pc/ac/tc: from the fault record (Tier-B/silicon TODO)
+	st	r12, 128(r6)		# pc = 0 (honest placeholder, not a wrong value)
+	st	r12, 132(r6)		# ac = 0
+	st	r12, 140(r6)		# tc = 0
+
 	# make sure palbank-0 pen 1 (the glyph pen) is visible white
 	lda	0x01800002, g2		# palette entry: palbank 0, pixel 1
 	lda	0x00007fff, g3		# white (BGR555)

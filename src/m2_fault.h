@@ -46,6 +46,31 @@ _Static_assert(__builtin_offsetof(m2_fault_t, recover_sp) == 20, "m2_fault_t.rec
 _Static_assert(__builtin_offsetof(m2_fault_t, busy)       == 24, "m2_fault_t.busy");
 _Static_assert(sizeof(m2_fault_t) == 28, "m2_fault_t size");
 
+/* ---- captured register frame — NINDY register_set[] layout ------------------------- *
+ * On a fault, kx_ftbl.s snapshots the faulting context here in the EXACT order Intel's
+ * NINDY monitor uses (regs.h): r0-r15, g0-g15, pc, ac, ip, tc. That makes a period
+ * gdb960 `target nindy` connection's `r`/`R` register commands a straight copy of this
+ * record. r0=pfp, r1=sp, r2=rip; g15=fp. FIXED at 0x5F0060, sized to abut frameVBL.
+ * NOTE: g0-g15 + ip are captured solidly (globals are live at fault entry); r0-r15 come
+ * from the faulting frame via pfp (NINDY faultasm recipe) and pc/ac/tc are a Tier-B/
+ * silicon refinement (MAME can't dispatch real faults to validate the frame offsets). */
+typedef struct {
+    u32 r[16];   /* +0    r0-r15  (r0=pfp, r1=sp, r2=rip)  */
+    u32 g[16];   /* +64   g0-g15  (g15=fp)                 */
+    u32 pc;      /* +128  process controls                */
+    u32 ac;      /* +132  arithmetic controls             */
+    u32 ip;      /* +136  faulting instruction pointer    */
+    u32 tc;      /* +140  trace controls                  */
+} m2_regs_t;     /* 144 bytes = NINDY register_set[36]     */
+
+#define M2_REGS_ADDR 0x005F0060u     /* FIXED — kx_ftbl.s writes these offsets in asm */
+#define M2_REGS      ((volatile m2_regs_t *)M2_REGS_ADDR)
+_Static_assert(__builtin_offsetof(m2_regs_t, g)  ==  64, "m2_regs_t.g");
+_Static_assert(__builtin_offsetof(m2_regs_t, pc) == 128, "m2_regs_t.pc");
+_Static_assert(__builtin_offsetof(m2_regs_t, ip) == 136, "m2_regs_t.ip");
+_Static_assert(sizeof(m2_regs_t) == 144, "m2_regs_t size");
+_Static_assert(M2_REGS_ADDR + 144u <= 0x005F00F0u, "m2_regs overruns the frameVBL cell");
+
 /* Arm fault recovery: after printing + recording a fault, kx_ftbl pivots to a fresh
  * frame at `stack_base` and BRANCHES (never calls) into `fn`, which must not return
  * (re-enter the project's serve/idle loop). Preserves the fault count across a soft
