@@ -79,29 +79,55 @@ fault_table:
 	.word	f_unknown	# 31
 	.word	0
 
-/* ---- per-type fault handlers (STF names) -------------------------------- */
+/* ---- per-type fault handlers (STF names + the fault-table type index in r5) ---- */
 	.align	4
 f_trace:	lda	s_trace, r4
+		mov	1, r5
 		b	fault_show
 f_operation:	lda	s_operation, r4
+		mov	2, r5
 		b	fault_show
 f_arith:	lda	s_arith, r4
+		mov	3, r5
 		b	fault_show
 f_rtarith:	lda	s_rtarith, r4
+		mov	4, r5
 		b	fault_show
 f_constrain:	lda	s_constrain, r4
+		mov	5, r5
 		b	fault_show
 f_protect:	lda	s_protect, r4
+		mov	7, r5
 		b	fault_show
 f_machine:	lda	s_machine, r4
+		mov	8, r5
 		b	fault_show
 f_type:		lda	s_type, r4
+		mov	10, r5
 		b	fault_show
 f_unknown:	lda	s_unknown, r4
+		lda	0xff, r5
 		b	fault_show
 
-/* fault_show: r4 = fault-name string, rip(r2) = faulting IP.
- * Draw  "<name>"  /  "IP :"  /  "<hex ip>"  on the tile layer, then halt. */
+/* SYNTHETIC fault entry (C-callable: `fault_selftest()`): drives the record + pivot +
+ * recovery chain below without CPU fault dispatch — MAME's i960 core has none (invalid
+ * ops fatalerror the emulator), so this is how the chain is exercised there; genuine
+ * silicon faults arrive via the table above and join the very same path. Called
+ * normally, so rip = the caller's return IP — a truthful "faulting IP". */
+	.globl	fault_selftest
+	.align	4
+fault_selftest:
+	lda	s_selftest, r4
+	lda	0xfe, r5
+	b	fault_show
+
+/* fault_show: r4 = fault-name string, r5 = type code, rip(r2) = faulting IP.
+ * 1. draw "<name>" / "IP :" / "<hex ip>" on the tile layer (works with no serial);
+ * 2. record {type, ip, count++} into the FIXED m2_fault_t @0x5F0040 (m2_fault.h —
+ *    layout asserted there; keep the offsets below in sync);
+ * 3. if a recovery entry is ARMED (recover_fn != 0): flush the register cache,
+ *    pivot to a fresh frame at recover_sp, and BRANCH into it (the kx_init
+ *    `b _main` pattern) — the monitor survives the fault. Unarmed: halt (legacy). */
 	.align	4
 fault_show:
 	# make sure palbank-0 pen 1 (the glyph pen) is visible white
@@ -120,6 +146,39 @@ fault_show:
 	lda	0x01000f90, g9
 	mov	rip, g0
 	call	phex
+
+	# ---- record the fault (m2_fault_t @ 0x5F0040: magic/count/type/ip/fn/sp) ----
+	lda	0x005F0040, r10
+	lda	0x4D325246, r11		# 'M2FR'
+	ld	(r10), r12		# magic valid? (cold RAM -> start count at 0)
+	cmpo	r11, r12
+	be	fr_count
+	st	r11, (r10)		# fresh record
+	mov	0, r12
+	st	r12, 4(r10)
+fr_count:
+	ld	4(r10), r12
+	addo	1, r12, r12
+	st	r12, 4(r10)		# count++
+	st	r5, 8(r10)		# type
+	st	rip, 12(r10)		# faulting IP
+
+	# ---- recovery armed? pivot to the fresh stack and branch into the kernel ----
+	ld	16(r10), r12		# recover_fn
+	cmpo	r12, 0
+	be	fs_halt			# unarmed: legacy print-and-halt
+	ld	24(r10), r14		# FAULT-STORM GUARD: a fault DURING recovery means
+	cmpo	r14, 0			# the kernel/bus state is too damaged to recover —
+	bne	fs_halt			# halt (legacy) instead of looping fault->recover
+	mov	1, r14
+	st	r14, 24(r10)		# busy = 1 (recovery clears it at steady state)
+	ld	20(r10), r13		# recover_sp (fresh frame base)
+	flushreg			# spill/empty the register cache before re-basing
+	mov	0, pfp			# terminate the frame chain
+	mov	r13, fp
+	lda	64(r13), sp		# fresh frame: sp = fp + 64
+	mov	0, g14			# C ABI: g14 = 0 (the kx_init `b _main` pattern)
+	bx	(r12)			# never returns (re-enters the serve loop)
 fs_halt:
 	b	fs_halt
 
@@ -179,4 +238,5 @@ s_protect:	.asciz	"protection"
 s_machine:	.asciz	"machine"
 s_type:		.asciz	"type"
 s_unknown:	.asciz	"unknown"
+s_selftest:	.asciz	"selftest"
 s_ip:		.asciz	"IP :"

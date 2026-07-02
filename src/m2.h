@@ -36,6 +36,7 @@ typedef unsigned int   u32;
 #include "m2_workaround.h" /* three-target quirk shims (m2emu MEMB dodge, g14 double-write) */
 #include "m2_wait.h"    /* instrumented hardware waits (m2_waitdbg record + M2W_* sites) */
 #include "m2_post.h"    /* POST-code boot progress at fixed 0x5F0000 (M2POST_* stages) */
+#include "m2_fault.h"   /* fault record @0x5F0040 + opt-in recovery hook (kx_ftbl.s)   */
 
 /* Pure-C Newton sqrt — the SDK's one sqrt (was duplicated as g2d__sqrt/geo__sqrt).
  * Do NOT route this through the COP (m2_cop_sqrt): COP_SQRT is always "defined"
