@@ -26,6 +26,12 @@
 	.globl  _irq_vblank
 	.globl  _irq_serial
 
+	# frameVBL — a FIXED platform cell (see m2.h M2_FRAMEVBL_ADDR): was a C .bss
+	# global whose floating address forced apps into --just-symbols lockstep with
+	# the kernel. The ISR below still increments it by name; this .set is now the
+	# symbol's only definition (m2.h accesses it through a deref macro).
+	.set	_frameVBL, 0x005F00F0
+
 
 _user_intr_empty:
 	ret

@@ -120,8 +120,12 @@ static void m2_3d_boot(void) {
 static void m2_cop_initialize(void) {
     volatile u32 *cop_ctl  = (volatile u32 *)COP_STATUS_REG;
     volatile u32 *cop_fifo = (volatile u32 *)M2_COPFIFO_ADDR;
-    u32 g = 0;
-    while (!(*cop_ctl & 1u) && ++g < 200000u) (void)*cop_fifo;
+    u32 g = 0, v;
+    /* compound wait (drains the FIFO per poll) — bracketed by hand, not m2_wait_mask32 */
+    m2_wait_enter(M2W_COP_ARM);
+    while (!((v = *cop_ctl) & 1u) && ++g < 200000u) { (void)*cop_fifo; m2_wait_beat(g); }
+    if (v & 1u) m2_wait_exit();
+    else        m2_wait_timeout(M2W_COP_ARM, COP_STATUS_REG, v);
     *cop_fifo = 0u;
 }
 
@@ -170,7 +174,15 @@ static void m2_3d_solid(int colorbase, u16 bgr555) {
  * frame (m2_frame_begin does it), not per object. This is the poly-test threading; STF's main render uses
  * a different per-object path (a separate, deeper COP<->GEO coherence concern). */
 static u32 g_cop_p2, g_cop_p;
-static void cop_drain(volatile u32 *cf, u32 n) { volatile u32 d = 0u; while (n-- > 0u) d = *cf; (void)d; }
+/* Drain n COP result words. Each read STALLS the i960 until the SHARC answers — that stall
+ * is inside ONE bus access and cannot be bounded in software, so mark the site: a hang here
+ * shows m2_waitdbg.in_site == M2W_COP_DRAIN with a frozen heartbeat. */
+static void cop_drain(volatile u32 *cf, u32 n) {
+    volatile u32 d = 0u;
+    m2_wait_enter(M2W_COP_DRAIN);
+    while (n-- > 0u) d = *cf;
+    m2_wait_exit(); (void)d;
+}
 static void cop_submit_object(volatile u32 *cf, const volatile u32 *hdr) {
     u32 wr; volatile u32 s, p2, p;
     *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;           /* fadd x3 fence */

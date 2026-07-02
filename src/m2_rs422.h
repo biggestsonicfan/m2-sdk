@@ -47,21 +47,18 @@ static u8  xt_ring[XT_RING];
 static u16 xt_rh, xt_rt;     /* head (read), tail (write) */
 
 M2_API void xtransport_init(void) {
-    M2_IO.mode = 0x00u;         /* master, no loopback (written twice: gcc960 g14) */
-    M2_IO.mode = 0x00u;
+    M2_WRITE_TWICE(M2_IO.mode, 0x00u);   /* master, no loopback (g14 shim, m2_workaround.h) */
     xt_rh = xt_rt = 0;
 }
 
 M2_API void xtransport_loopback(int on) {
     u8 v = on ? XT_LOOP : 0x00u;
-    M2_IO.mode = v;
-    M2_IO.mode = v;
+    M2_WRITE_TWICE(M2_IO.mode, v);
 }
 
-/* Wait for the two-channel handshake: both receive buffers full (bounded). */
+/* Wait for the two-channel handshake: both receive buffers full (bounded + recorded). */
 static void xt_wait_ack(void) {
-    u32 g = 0;
-    while ((M2_IO.flag & XT_RXBF_BOTH) != XT_RXBF_BOTH && ++g < XT_SPIN) { }
+    (void)m2_wait_mask8(M2W_XT_RX, (u32)&M2_IO.flag, XT_RXBF_BOTH, XT_RXBF_BOTH, XT_SPIN);
 }
 
 /* One faithful transaction: latch data into TXD2, strobe the command into TXD1,

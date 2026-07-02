@@ -33,6 +33,9 @@ typedef unsigned short u16;
 typedef unsigned int   u32;
 
 #include "m2_debug.h"   /* M2_DBG / M2_DBGH serial trace (no-op unless -DM2_DEBUG) */
+#include "m2_workaround.h" /* three-target quirk shims (m2emu MEMB dodge, g14 double-write) */
+#include "m2_wait.h"    /* instrumented hardware waits (m2_waitdbg record + M2W_* sites) */
+#include "m2_post.h"    /* POST-code boot progress at fixed 0x5F0000 (M2POST_* stages) */
 
 /* Pure-C Newton sqrt — the SDK's one sqrt (was duplicated as g2d__sqrt/geo__sqrt).
  * Do NOT route this through the COP (m2_cop_sqrt): COP_SQRT is always "defined"
@@ -103,8 +106,7 @@ static float m2_sqrtf(float x) {
 #define M2_UART_DATA (*(volatile u16 *)0x01C80000u)
 #define M2_UART_STAT (*(volatile u16 *)0x01C80002u)   /* read: 8251 status; bit0 = TxRDY */
 M2_API void m2_uart_putc(char c) {
-    u32 g = 0;
-    while (!(M2_UART_STAT & 0x01u) && ++g < 200000u) { }
+    (void)m2_wait_mask16(M2W_UART_TX, 0x01C80002u, 0x01u, 0x01u, 200000u);  /* TxRDY */
     M2_UART_DATA = (u16)(u8)c;
 }
 M2_API void m2_uart_puts(const char *s) { while (*s) m2_uart_putc(*s++); }
@@ -120,7 +122,13 @@ M2_API void m2_uart_hex(u32 v) {           /* "XXXXXXXX" big-endian nibbles */
 #include "m2font.h"            /* const u8 gFont[128*32] */
 
 /* ---- linker stubs (referenced by the boot .s; defined once here) ---------- */
-volatile u32 frameVBL = 0;     /* incremented by the vblank ISR (_irq_vblank) */
+/* vblank frame counter — a FIXED platform cell (the M2_EXIT_CTL pattern), incremented
+ * by the vblank ISR (i_handle.s _irq_vblank, .set to the same address). Was a kernel
+ * .bss global, whose floating address forced apps into --just-symbols lockstep with
+ * the kernel; fixed, it is shareable forever (apps get it via PROVIDE in lib/app.ld).
+ * NOT auto-zeroed (outside .bss/.data) — m2_init resets it; consumers only delta it. */
+#define M2_FRAMEVBL_ADDR 0x005F00F0u
+#define frameVBL (*(volatile u32 *)M2_FRAMEVBL_ADDR)
 /* STF work-RAM globals (M2_MEM.vsync = RAMBASE_START etc.) — the vblank/timer ISRs in
  * i_handle.s still reach them via the linker symbols _RAMBASE_START / _timerFlag. */
 #include "m2_memory.h"
@@ -269,8 +277,7 @@ M2_API void m2_exit_disarm(void) { *(volatile u32 *)M2_EXIT_CTL = 0; }
 #define M2_SND_CTL  (*(volatile u32 *)0x009C0004u)
 M2_API void m2__snd_delay(void) { volatile int i; for (i = 0; i < 80; i++) { } }
 M2_API void m2_sound_byte(u8 b) {
-    u32 g = 0;
-    while (!(M2_SND_CTL & 0x01u) && ++g < 100000u) { }   /* wait i8251 TxRDY (bounded) */
+    (void)m2_wait_mask32(M2W_SND_TX, 0x009C0004u, 0x01u, 0x01u, 100000u);   /* i8251 TxRDY */
     M2_SND_DATA = b;
 }
 M2_API void m2_sound(u32 code) {    /* 24-bit command, MSB-first */
@@ -336,6 +343,7 @@ M2_API void m2_loadfont(void) {
 M2_API void m2_init(void) {
     int i;
 
+    frameVBL = 0;             /* fixed cell (not .bss) — powers up as garbage */
     m2__build_colorxlat();
     m2__build_luma2();        /* STF start_again_ip: LUMA2 (0x12800000) ramp */
     m2_setpal(0, 0);          /* default backdrop = black (games may override) */
@@ -397,8 +405,7 @@ M2_API void m2_init(void) {
         M2_IO.sig0 = 'S'; M2_IO.sig1 = 'E'; M2_IO.sig2 = 'G'; M2_IO.sig3 = 'A';
     }
 
-    M2_IRQ_ENA = M2_IRQ_VBL;       /* enable vblank source (written twice — */
-    M2_IRQ_ENA = M2_IRQ_VBL;       /* gcc960 -O2 g14 workaround)            */
+    M2_WRITE_TWICE(M2_IRQ_ENA, M2_IRQ_VBL);  /* enable vblank source (g14 shim, m2_workaround.h) */
 }
 
 #endif /* M2_H */

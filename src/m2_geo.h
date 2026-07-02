@@ -411,9 +411,23 @@ static void change_poly_bank(void) {
 }
 
 /* STF interrupt_wait @0x1768: spin until M2_MEM.vsync >= 2 with bit0 clear (two
- * vsync IRQs), clear it, then change_poly_bank. */
+ * vsync IRQs), clear it, then change_poly_bank.
+ * UNBOUNDED by design (STF-faithful): if the vblank IRQ is dead we still hang — but now
+ * DIAGNOSABLY. in_site = M2W_GEO_IRQ with a live heartbeat, and past ~0.5 s of spinning
+ * the timeout is recorded + the hook fires ONCE while the wait continues (bounding it
+ * would break the GEO buffer rotation on a merely-slow frame). */
+#define M2W_GEO_IRQ_SUSPECT 2000000u
 static void geo_interrupt_wait(void) {
-    while ((M2_MEM.vsync < 2u) || (M2_MEM.vsync & 1u)) { }
+    u32 g = 0;
+    m2_wait_enter(M2W_GEO_IRQ);
+    while ((M2_MEM.vsync < 2u) || (M2_MEM.vsync & 1u)) {
+        ++g; m2_wait_beat(g);
+        if (g == M2W_GEO_IRQ_SUSPECT) {
+            m2_wait_timeout(M2W_GEO_IRQ, (u32)&M2_MEM.vsync, M2_MEM.vsync);
+            m2_waitdbg.in_site = M2W_GEO_IRQ;   /* still waiting: keep the marker */
+        }
+    }
+    m2_wait_exit();
     M2_MEM.vsync = 0u;
     change_poly_bank();
 }
