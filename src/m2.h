@@ -75,6 +75,10 @@ static float m2_sqrtf(float x) {
  * hardware, so m2_vsync read garbage and jumped to a bad handler = invalid op.) */
 #define M2_EXIT_CTL   0x005F8000u
 #define M2_EXIT_MAGIC 0x45584954u    /* 'EXIT' */
+typedef struct { u32 magic; u32 handler; } m2_exit_t;
+#define M2_EXIT (*(volatile m2_exit_t *)M2_EXIT_CTL)
+_Static_assert(__builtin_offsetof(m2_exit_t, magic)   == 0, "m2_exit_t.magic");
+_Static_assert(__builtin_offsetof(m2_exit_t, handler) == 4, "m2_exit_t.handler");
 
 #define M2_RENDERMODE (*(volatile u16 *)0x10000000u)
 #define M2_HSYNC      (*(volatile u16 *)0x01040000u)
@@ -160,10 +164,10 @@ M2_API void m2_vsync(void) {
     while (frameVBL == start) { }
     /* armed by a launcher: P1 Start returns control to it (stop the app) */
     {
-        volatile u32 *ex = (volatile u32 *)M2_EXIT_CTL;
-        if (ex[0] == M2_EXIT_MAGIC) {
+        volatile m2_exit_t *ex = &M2_EXIT;
+        if (ex->magic == M2_EXIT_MAGIC) {
             M2_IO.bank = 0;
-            if (!(M2_IO.in0 & 0x10u)) ((void (*)(void))ex[1])();   /* never returns */
+            if (!(M2_IO.in0 & 0x10u)) ((void (*)(void))ex->handler)();   /* never returns */
         }
     }
 }
@@ -262,10 +266,10 @@ M2_API u32 m2_start(void) {         /* IN0: bit4 = START1, bit5 = START2 */
 
 /* Launcher control of the m2_vsync P1-Start exit hook (see M2_EXIT_CTL). */
 M2_API void m2_exit_arm(void (*handler)(void)) {
-    volatile u32 *ex = (volatile u32 *)M2_EXIT_CTL;
-    ex[1] = (u32)handler; ex[0] = M2_EXIT_MAGIC;
+    volatile m2_exit_t *ex = &M2_EXIT;
+    ex->handler = (u32)handler; ex->magic = M2_EXIT_MAGIC;
 }
-M2_API void m2_exit_disarm(void) { *(volatile u32 *)M2_EXIT_CTL = 0; }
+M2_API void m2_exit_disarm(void) { M2_EXIT.magic = 0; }
 
 /* ---- sound (sound board: i8251 USART -> SCSP MIDI) ------------------------- *
  * The i960 sends 3-byte sound commands to the sound 68000 via an i8251 USART:

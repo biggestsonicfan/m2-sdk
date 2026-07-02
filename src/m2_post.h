@@ -40,6 +40,14 @@ typedef struct {
 #define M2_POST_ADDR  0x005F0000u   /* FIXED — keep host tools' copy in sync   */
 #define M2_POST       ((volatile m2_post_t *)M2_POST_ADDR)
 
+/* the host tools index these fields as raw words — pin the layout at compile time */
+_Static_assert(__builtin_offsetof(m2_post_t, magic) ==  0, "m2_post_t.magic");
+_Static_assert(__builtin_offsetof(m2_post_t, stage) ==  4, "m2_post_t.stage");
+_Static_assert(__builtin_offsetof(m2_post_t, seen)  ==  8, "m2_post_t.seen");
+_Static_assert(__builtin_offsetof(m2_post_t, prev)  == 12, "m2_post_t.prev");
+_Static_assert(__builtin_offsetof(m2_post_t, boots) == 16, "m2_post_t.boots");
+_Static_assert(sizeof(m2_post_t) == 20, "m2_post_t size");
+
 /* ---- canonical boot stages (bits in `seen`; keep < 32 and in boot order) ----
  * The geoserial kernel enters them in this order; a standalone/other kernel may skip
  * some (that is what the `seen` mask is for). */

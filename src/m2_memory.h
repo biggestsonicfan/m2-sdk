@@ -21,7 +21,12 @@ typedef struct {
     u32 vsync;                 /* 0x0000  RAMBASE_START — vblank-ISR counter; interrupt_wait spins on it */
     u8  _g0[0x88];             /* 0x0004..0x008B                                                         */
     u32 timer_flag;            /* 0x008C  STF byte_50008C — timer-ISR flag                               */
-    u8  _g1[0xF70];            /* 0x0090..0x0FFF                                                         */
+    u8  _g1a[0x1C0];           /* 0x0090..0x024F                                                         */
+    u32 texram_ptr[4];         /* 0x0250  STF wait_data texram bank pointers — the boot writes
+                                *         {sheet window, TEXRAM_0_1, TEXRAM_1, M2_LUMARAM}               */
+    u8  _g1b[0xCA0];           /* 0x0260..0x0EFF                                                         */
+    u8  wait_data;             /* 0x0F00  STF wait_data mode byte (the boot writes 2)                    */
+    u8  _g1c[0xFF];            /* 0x0F01..0x0FFF                                                         */
     u8  poly_bank;  u8 _p[3];  /* 0x1000  change_poly_bank cache (low byte of the COP poly bank)         */
     u32 buff_add;              /* 0x1004  current display-list buffer address                           */
     u32 buff_max;              /* 0x1008  BUFF_MAX                                                       */
@@ -33,6 +38,8 @@ typedef struct {
 /* sanity: catch any struct padding that would slide a global off its STF address. */
 _Static_assert(__builtin_offsetof(m2_mem_t, vsync)      == 0x0000, "m2_mem_t.vsync");
 _Static_assert(__builtin_offsetof(m2_mem_t, timer_flag) == 0x008C, "m2_mem_t.timer_flag");
+_Static_assert(__builtin_offsetof(m2_mem_t, texram_ptr) == 0x0250, "m2_mem_t.texram_ptr");
+_Static_assert(__builtin_offsetof(m2_mem_t, wait_data)  == 0x0F00, "m2_mem_t.wait_data");
 _Static_assert(__builtin_offsetof(m2_mem_t, poly_bank)  == 0x1000, "m2_mem_t.poly_bank");
 _Static_assert(__builtin_offsetof(m2_mem_t, buff_add)   == 0x1004, "m2_mem_t.buff_add");
 _Static_assert(__builtin_offsetof(m2_mem_t, buff_max)   == 0x1008, "m2_mem_t.buff_max");
