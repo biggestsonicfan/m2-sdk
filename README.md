@@ -80,6 +80,23 @@ build, so it runs on **m2emulator** and real hardware (and MAME under
 renders under MAME's HLE-off but did **not** display on m2emulator — `m2_obj.h`
 object_data is the portable silicon path (as m2-snake's `-DM2_HW` profile uses).
 
+### Performance: soft-float vs the COP
+
+Per-frame transform math (rotating vertices/columns) is the usual hot spot: under the
+default soft-float build each `mul`/`add` is a ~100-cycle libgcc call, so a few hundred
+rotations can blow the 16 ms frame budget. Routing those through the COP's own ops —
+`m2_cop_rot2d` (rotate a 2-vector), `cop_sincos`, `m2_cop_wmatrix`/`m2_cop_m2w` — is
+much faster: measured **~6×** on isolated rotations and **~2×** on the full shaded sphere
+(`src/spheres.c` shows both side by side, spun by their on-device-measured throughput).
+The scalar helpers (`m2_cop_fadd/fmul/dot2d/sqrt`) are folded to native by `m2_fastmath.h`
+unless you define `M2_NO_FASTMATH`; the vector/trig ops above always use the FIFO.
+
+Two caveats: (1) drive the COP only on the **display-list render path** (`geo_matrix`/
+`geo_object`) — per-frame COP math that shares the FIFO with the op-0x78 geometry submit
+crashed m2emulator. (2) The four board timers at `0x00F00000` are STF one-shot countdowns
+that read ~static unless you program them, so use the vblank counter (`frameVBL`) — which
+the IRQ always ticks at 60 Hz — as the reliable clock for on-device timing.
+
 ## Modules (`src/`)
 
 Header-only; include from exactly ONE `.c` (they define the boot stubs):
@@ -98,7 +115,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_obj.h` | **Silicon 3D objects** (COP-bridge): `m2_obj_frame_setup` (projection ONCE/frame), `m2_obj_submit` (a model-table object), `m2_solid_quad` (flat-colour quad). Pulls in `m2_boot.h` (for `m2_silicon_boot`) + `stf_cop_preamble.h`. m2-snake's ice-cube sandbox. |
 | `m2_tex_codec.h` | Decode an STF compressed texture page from the texture ROM into a GEO sheet (`tex_load_atlas`) — textures straight from the ROM source, no embedded blob. |
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
-| `m2_io.h` | The 315-5649 on-board I/O chip as one struct (`M2_IO`): input bank + player ports, the RS-422 link registers, and the STF bring-up handshake. Pulled in by `m2.h`. |
+| `m2_io.h` | The 315-5649 on-board I/O chip as one struct (`M2_IO`): input bank + player ports (raw `M2_IN0_*`/`M2_INP_*` masks + decoded `m2_player_t`/`m2_player`) and the RS-422 link registers. Pulled in by `m2.h`. |
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport (uses `M2_IO`). |
 | `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |

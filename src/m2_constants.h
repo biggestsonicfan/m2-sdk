@@ -86,43 +86,111 @@
 #define COP_SCALE     COP_CMD(0x07)  /* in: sx,sy,sz; rot[col][row] *= s per col     */
 #define COP_SUBMIT    COP_CMD(0x78)  /* polygon_submit: commit the transformed object */
 
-/* extended scalar / vector math (cpres1 handler bodies, disasm-verified). The three marked
- * "no STF opcode" are valid cpres1 handlers the shipping game never emits, but which still run. */
-#define COP_RSQRT     COP_CMD(0x19)  /* in: float; out: 1/sqrt(x) (0 if x<=0)        */
+/* extended scalar / vector math. Six of these (⚠ below) DIVERGE from the annotated cpres1
+ * dispatch table (../m2-hle/disassembly/cpres1_ad_annotated.asm) — they are the semantics
+ * MAME's HLE COP (model2.cpp) gives these indices, NOT what booted cpres1 silicon does:
+ *   - 0x19/0x2A/0x2E: on cpres1 these land in the no-handler / error-halt region (indices
+ *     0x88..0xFF and several gaps below map to _L2016F, which spins forever). RSQRT/DOT3/MAG3D
+ *     resolve ONLY under MAME-HLE; emitting them to real cpres1 hangs the COP.
+ *   - 0x30/0x5A/0x5B: on cpres1 these are DIFFERENT real ops — 0x30 = rotate2D (COP_ROTATE2DZ),
+ *     0x5A = coli col0 transform (COP_COLI_COL0), 0x5B = passthrough_yz (COP_PASSTHRU_YZ), all
+ *     defined in the silicon block below. The norm2/norm3 code cpres1 does have lives INSIDE the
+ *     0x4A anim-reader's local jump table, not as standalone top-level opcodes.
+ * The wrappers in m2_math.h keep these HLE spellings (they back the m2_cop_rot2d demos); trust
+ * them only under M2_HLE_GEO_OFF-off (i.e. real HLE), never on silicon. See m2_math.h note. */
+#define COP_RSQRT     COP_CMD(0x19)  /* in: float; out: 1/sqrt(x) — ⚠ HLE-only (cpres1 0x19 = error halt) */
 #define COP_TAN       COP_CMD(0x23)  /* in: i16 angle; out: float tan (sin/cos)      */
 #define COP_SINSCALE  COP_CMD(0x24)  /* in: i16 angle, s; out: sin(angle)*s          */
 #define COP_COSSCALE  COP_CMD(0x25)  /* in: i16 angle, s; out: cos(angle)*s          */
 #define COP_ASIN      COP_CMD(0x26)  /* in: float [-1,1]; out: i16 asin              */
 #define COP_ATAN2F    COP_CMD(0x27)  /* in: x,y float; out: i16 atan2(y,x)           */
-#define COP_DOT3      COP_CMD(0x2A)  /* in: a0,b0,a1,b1,a2,b2; out: a.b  (no STF op) */
+#define COP_DOT3      COP_CMD(0x2A)  /* in: a0,b0,a1,b1,a2,b2; out: a.b — ⚠ HLE-only (cpres1 0x2A = no handler) */
 #define COP_DIST3D    COP_CMD(0x2C)  /* in: x1,x2,y1,y2,z1,z2; out: 3D distance      */
 #define COP_MAG2D     COP_CMD(0x2D)  /* in: a,b; out: sqrt(a^2+b^2)                  */
-#define COP_MAG3D     COP_CMD(0x2E)  /* in: a,b,c; out: sqrt(a^2+b^2+c^2) (no STF op)*/
-#define COP_NORM3     COP_CMD(0x30)  /* in: x,y,z; out: unit vector (cpres1; see m2_math.h note) */
+#define COP_MAG3D     COP_CMD(0x2E)  /* in: a,b,c; out: sqrt(a^2+b^2+c^2) — ⚠ HLE-only (cpres1 0x2E = no handler) */
+#define COP_NORM3     COP_CMD(0x30)  /* in: x,y,z; out: unit vector — ⚠ HLE-only (cpres1 0x30 = COP_ROTATE2DZ) */
 #define COP_DOT2D     COP_CMD(0x59)  /* in: a,b,c,d; out: a*b+c*d                    */
-#define COP_NORM2     COP_CMD(0x5A)  /* in: x,y; out: unit vector  (cpres1; see m2_math.h note)  */
-#define COP_ROT2D     COP_CMD(0x5B)  /* in: i16 angle,x,y; out: rotated x,y (cpres1) */
+#define COP_NORM2     COP_CMD(0x5A)  /* in: x,y; out: unit vector — ⚠ HLE-only (cpres1 0x5A = COP_COLI_COL0) */
+#define COP_ROT2D     COP_CMD(0x5B)  /* in: i16 angle,x,y; out: rotated x,y — ⚠ HLE-only (cpres1 0x5B = COP_PASSTHRU_YZ) */
 #define COP_ADD3      COP_CMD(0x5C)  /* in: a0,b0,a1,b1,a2,b2; out: a+b              */
 #define COP_SUB3      COP_CMD(0x5D)  /* in: a0,b0,a1,b1,a2,b2; out: a-b  (no STF op) */
 #define COP_SCALE3    COP_CMD(0x5E)  /* in: s,x,y,z; out: s*x,s*y,s*z                */
 #define COP_W2M       COP_CMD(0x6A)  /* in: x,y,z; out: rot*((x,y,z)-T) world->model */
 
+/* ==== COP bone / matrix transform ops (cpres1 silicon, annotated dispatch table) ==============
+ * Handlers present in the annotated cpres1 disassembly that operate on the current bone frame
+ * (rot 3x3 + T) or the bone slot cache. "in/out" = FIFO float words consumed/produced. The STF
+ * game never emits most of these, but the booted SHARC runs them. */
+#define COP_PREMUL_BONE  COP_CMD(0x0B)  /* in:12 out:0  read 12 col-major floats, incoming*current_bone -> bone (shadow/kage) */
+#define COP_ZERO_TRANS   COP_CMD(0x0D)  /* in:0  out:0  T[0..2] = 0 (clear world translation)          */
+#define COP_READ_POS     COP_CMD(0x0F)  /* in:0  out:3  T[0..2] -> FIFO (world pos, snapshot on ang_y)  */
+#define COP_EXT_ROT      COP_CMD(0x11)  /* in:9  out:0  9 floats -> PM, PM*bone -> bone slot            */
+#define COP_INV_TRANSPOSE COP_CMD(0x12) /* in:0  out:0  invert-transpose bone rot in place              */
+#define COP_SET_ANG_XYZ  COP_CMD(0x3F)  /* in:3  out:1  3 i16 angles -> ang_x,ang_y,ang_z (out word=0)  */
+#define COP_ROT_COL0     COP_CMD(0x56)  /* in:0  out:3  bone rot col0 (offsets 0..2) -> 3 floats        */
+#define COP_ROT_COL1     COP_CMD(0x57)  /* in:0  out:3  bone rot col1 (offsets 3..5) -> 3 floats        */
+#define COP_ROT_COL2     COP_CMD(0x58)  /* in:0  out:3  bone rot col2 (offsets 6..8) -> 3 floats        */
+#define COP_KAGE_MATRIX  COP_CMD(0x67)  /* in:1  out:0  build shadow-projection matrix from bone        */
+#define COP_AXIS_ANGLE   COP_CMD(0x69)  /* in:? out:0  build bone rot from axis+angle (Rodrigues)       */
+
+/* bone-slot cache (per-player scratch matrices). STF: save/load pose matrices across frames. */
+#define COP_STORE_TGP    COP_CMD(0x34)  /* in:1  out:1  copy current bone (12w) to DM[0x1400000+arg/4]  */
+#define COP_SAVE_BONE    COP_CMD(0x35)  /* in:2  out:0  current bone -> bone_slot[player][slot]          */
+#define COP_LOAD_BONE    COP_CMD(0x36)  /* in:2  out:0  bone_slot[player][slot] -> current bone (copy)   */
+#define COP_LOAD_BONE_MUL COP_CMD(0x37) /* in:2  out:0  bone_slot * current -> current bone              */
+#define COP_SEL_BONE_BUF COP_CMD(0x38)  /* in:1  out:0  arg=1 selects player2 bone data buffer           */
+
+/* ==== COP interpolation / silicon-verified vector ops (cpres1 dispatch table) =================
+ * The three ⚠ ops are the TRUE cpres1 meaning of indices whose MAME-HLE spelling above
+ * (COP_NORM3 / COP_NORM2 / COP_ROT2D) differs — use these when targeting real silicon. */
+#define COP_ROTATE2DZ    COP_CMD(0x30)  /* in:3 out:3  (angle,x,y) -> (x*cos-y*sin, x*sin+y*cos, y) — cpres1 0x30 (⚠ = HLE COP_NORM3) */
+#define COP_LERP         COP_CMD(0x31)  /* in:4 out:1  a+(b-a)*t/span (linear interpolate)             */
+#define COP_FCURVE       COP_CMD(0x32)  /* in:6 out:1  Hermite cubic f-curve eval                      */
+#define COP_SMOOTH_INT   COP_CMD(0x54)  /* in:9 out:3  set_identity + 9 ang ops -> 3 Euler i16 angles   */
+#define COP_COLI_COL0    COP_CMD(0x5A)  /* in:2 out:2  (col0.x,col0.y) -> transformed pair — cpres1 0x5A (⚠ = HLE COP_NORM2) */
+#define COP_PASSTHRU_YZ  COP_CMD(0x5B)  /* in:3 out:2  (idx,y,z) -> (y,z) — cpres1 0x5B (⚠ = HLE COP_ROT2D) */
+#define COP_GET_FRAME    COP_CMD(0x63)  /* in:7 out:3  cpres1 delta-frame calc — NOTE: real STF COP returns 0,0,0 */
+#define COP_IK_SOLVER    COP_CMD(0x6B)  /* in:17 out:1 2-bone IK chain (calc_rob_angle_cont)           */
+
+/* ==== COP utility ============================================================================= */
+#define COP_QUERY_COUNTER COP_CMD(0x82) /* in:0  out:1  read COP internal counter -> int               */
+
 /* ==== GEO (cpres2) display-list opcodes =======================================================
  * Same M2_SHARC_CMD(n) encoding as the COP (all 12 verified: e.g. LOD n=0x16 ->
- * (0x16<<23)|(0x16<<8)|0x16 = 0x0B001616). STF's encodings, verified vs MAME geo_parse. */
+ * (0x16<<23)|(0x16<<8)|0x16 = 0x0B001616). STF's encodings, verified vs MAME geo_parse.
+ *
+ * cpres2's dispatch index is (cmd>>23)&0x1f — only the LOW 5 BITS — so the whole GEO opcode
+ * space is 0x00..0x1F (32 handlers); opcodes with bit28 set alias down onto 0x01..0x0F. The
+ * handlers below 0x0C, plus 0x10/0x14/0x1D/0x1E, were decoded from the silicon microcode in
+ * ../m2-hle/disassembly/cpres2_annotated.asm — MAME HLEs the GEO and never runs cpres2, so
+ * these are silicon-only (invisible to MAME's geo_parse). "@0xNNN" = cpres2 PM offset. */
 #define GEO_OP(n)         M2_SHARC_CMD(n)
+#define GEO_OP_NOP        GEO_OP(0x00)  /* @0x171 no-op / stream guard        */
 #define GEO_OP_OBJECT     GEO_OP(0x01)  /* object_data: tpa, tha, oba, obc    */
 #define GEO_OP_DIRECT     GEO_OP(0x02)  /* direct_data: screen-space geometry */
 #define GEO_OP_WINDOW     GEO_OP(0x03)  /* window/clip: 6 coords              */
 #define GEO_OP_TEXDATA    GEO_OP(0x04)  /* texture-data -> texture_ram slots  */
+#define GEO_OP_POLYDATA   GEO_OP(0x05)  /* @0xb19 upload N words: oba bit24=1 -> texram 0x420000, else
+                                         * poly-ROM domain 0xff030100+base (self-authored mesh; m2_geo.h) */
 #define GEO_OP_TEXPARAM   GEO_OP(0x06)  /* texture params: index, count, ...  */
 #define GEO_OP_MODE       GEO_OP(0x07)  /* geo mode (&3 selects vtx parser)   */
 #define GEO_OP_ZSORT      GEO_OP(0x08)  /* zsort mode                         */
 #define GEO_OP_FOCAL      GEO_OP(0x09)  /* focal distance: fx, fy             */
 #define GEO_OP_LIGHT      GEO_OP(0x0A)  /* light vector: x, y, z              */
 #define GEO_OP_MATRIX     GEO_OP(0x0B)  /* transform matrix: 12 floats        */
+#define GEO_OP_TRANS      GEO_OP(0x0C)  /* @0xb8c 3 words -> matrix T slot (0x30020+0..2) + PM mirror */
+#define GEO_OP_RASTER     GEO_OP(0x0D)  /* @0xb9c generic raster-injection: i7=addr, cnt, then copy cnt
+                                         * words GEO DM[i7] -> rasterizer (can inject any raster token) */
+#define GEO_OP_STREAM     GEO_OP(0x0E)  /* @0xba3 stream-integrity guard (32 words == 1,2,4..0x80000000)
+                                         * then load N words to cursor region 0x30100 */
 #define GEO_OP_END        GEO_OP(0x0F)  /* end of list                        */
-#define GEO_OP_LOD        GEO_OP(0x16)  /* LOD                                */
+#define GEO_OP_CONSUME    GEO_OP(0x10)  /* @0xbfb no-op: reads + discards one operand word */
+#define GEO_OP_TEXUNPACK  GEO_OP(0x14)  /* @0xbfd emit hdr then byte-unpack loop (r&0xff,>>8,>>16,>>24)
+                                         * -> raster (texture/luma param bytes) */
+#define GEO_OP_LOD        GEO_OP(0x16)  /* LOD -> dm(0x3002f) base-mip LOD    */
+#define GEO_OP_UCODE      GEO_OP(0x1D)  /* @0xc14 dynamic PM microcode upload -> 0x20c00 (+ optional
+                                         * immediate call if word bit10 set): runtime patch region */
+#define GEO_OP_UCALL      GEO_OP(0x1E)  /* @0xc26 call an uploaded GEO_OP_UCODE patch: idx=word&0x3ff */
 
 /* geo mode low 2 bits select the polygon vertex parser. */
 #define GEO_MODE_NP_NS  0u   /* normals present, no specular */
@@ -157,11 +225,28 @@
 /* ==== fixed RAM regions (3D colour / texture pipeline) ======================================== */
 #define M2_PALRAM     0x01800000u  /* poly palette RAM: colorbase -> palram[cb+0x1000] (BGR555)  */
 #define M2_COLORXLAT  0x01810000u  /* R @+0x0000, G @+0x4000, B @+0x8000 (u16)                   */
-#define M2_LUMARAM    0x11400000u  /* polygon luma RAM (make_luma_ram fills it from the data ROM)*/
-#define TEXRAM_0_1    0x11100000u  /* texram sheet bank (mip ping-pong partner of TEXRAM_1)      */
-#define TEXRAM_1      0x11300000u  /* texram sheet bank (STF texram_1)                           */
+/* STF data ROM (geometry/textures/material). A model's material stream lives at M2_MAIN_DATA +
+ * tha*2 (tha = model header word[1]); its per-colorbase polygon palette (one BGR555, SET bit set)
+ * at M2_POLY_PAL + cb*2 = M2_MAIN_DATA + 0x100000 + cb*2 (GEO3D_PALETTE_OFF). send_tex_col uploads
+ * these into M2_PALRAM at init; a bare kernel doesn't, so STF models render black until copied
+ * (see m2_load_model_palette in m2_obj.h). Verified live: tools/pengo_model_probe / pengo_pal_probe. */
+#define M2_MAIN_DATA  0x02000000u  /* STF main data ROM base (material stream = +tha*2)          */
+#define M2_POLY_PAL   0x02100000u  /* per-colorbase polygon palette = M2_MAIN_DATA + 0x100000    */
+/* Texture/luma RAM bank bases — the four pointers STF's start_ip writes to RAMBASE 0x500250..
+ * 0x50025C (texram_0 / texram_0_1 / texram_1 / luma_ram), verified by reading them live from a
+ * running kernel (tools/pengo_model_probe.py). The sheet banks sit 0x200000 apart. The mip codec
+ * (m2_tex_codec.h tex_mip_dests) ping-pongs the TEXRAM_0_1 / TEXRAM_1 pair; TEXRAM_0 is the extra
+ * bank STF loads the COMMON character sheet into (unused by the stock codec path). */
+#define TEXRAM_0      0x10F00000u  /* STF texram_0   (RAMBASE 0x500250) — common-sheet bank        */
+#define TEXRAM_0_1    0x11100000u  /* STF texram_0_1 (RAMBASE 0x500254) — mip ping-pong w/ TEXRAM_1 */
+#define TEXRAM_1      0x11300000u  /* STF texram_1   (RAMBASE 0x500258) — mip ping-pong w/ TEXRAM_0_1*/
+#define M2_LUMARAM    0x11400000u  /* STF luma_ram   (RAMBASE 0x50025C) — polygon luma RAM          */
 #define GEO_ZCLIP_REG 0x0181C000u  /* _3D_ZCLIP_START (write 0xFF byte / 0xFFFF00FF word to
-                                    * disable board-level near clip)                             */
+                                   /* disable board-level near clip)                             */
 #define ZCLIP_REG     GEO_ZCLIP_REG   /* legacy alias */
+
+/* Named bitfields for the polygon words above (attribute / texture header / z-sort / palette SET),
+ * with _Static_asserts tying the names back to the shipped magic values. Tail of the hardware map. */
+#include "m2_polyattr.h"
 
 #endif /* M2_CONSTANTS_H */

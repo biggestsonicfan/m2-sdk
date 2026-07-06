@@ -62,6 +62,14 @@ _irq_vblank:
 	addi    1, g0, g0
 	st		g0, _RAMBASE_START		# RAMBASE_START++ (STF VsyncScr; interrupt_wait spins on it)
 
+	# STF VsyncScr @+48/+4C: snapshot the digital inputs into the HELD/MOMENTARY/
+	# MOMEN_ON_REL edge state (M2_MEM @0x500700) and push the coin-counter output,
+	# every vblank. g14=0 (set above) satisfies the C ABI; g0-g15 are already saved
+	# to the r3 scratch frame and restored in vbl_restore, so the callee may clobber
+	# them freely. Both are integer-only (no soft-float), so ISR-safe on m2emu.
+	call    _read_sw
+	call    _write_sw
+
 	# ---- BREAK-IN: abort a running/hung app back to the monitor (m2_fault.h m2_break_t
 	# @0x5F0020). Gated on `armed` so the boot/manager fast-path is unaffected. Triggers:
 	# `request` (host writes 1 -> bridge-pokeable) OR the SERVICE button (IN0 bit2, low).

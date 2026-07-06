@@ -137,9 +137,17 @@ M2_API void m2_uart_hex(u32 v) {           /* "XXXXXXXX" big-endian nibbles */
 /* STF work-RAM globals (M2_MEM.vsync = RAMBASE_START etc.) — the vblank/timer ISRs in
  * i_handle.s still reach them via the linker symbols _RAMBASE_START / _timerFlag. */
 #include "m2_memory.h"
-void handleSerialIRQ(void) { }
-void kickGEO(void) { }
-void waitVBL(void) { }
+/* STF read_sw/write_sw/io_request_chk/read_analog_to_ram + the HELD/pressed/released
+ * edge model. AFTER m2_memory.h (uses M2_MEM) and m2_io.h (M2_INP_* masks). read_sw/
+ * write_sw are called from the vblank ISR (i_handle.s VsyncScr). */
+#include "m2_swio.h"
+/* M2_API so these are GLOBAL in the kernel (the boot .s references them by linker
+ * symbol) but `static` in any app TU that includes m2.h directly (e.g. platformer):
+ * that keeps a GS_STANDALONE build — app + kernel linked into one image — from
+ * hitting a multiple-definition collision on them. */
+M2_API void handleSerialIRQ(void) { }
+M2_API void kickGEO(void) { }
+M2_API void waitVBL(void) { }
 
 /* Mask / unmask maskable interrupts via the i960 process priority (modpc: 0x1F=31
  * masks vblank etc.; 0 accepts them). Wrap a brief soft-float critical section in
@@ -386,10 +394,11 @@ M2_API void m2_init(void) {
     { volatile u16 *w = (volatile u16 *)0x0100C000u; int k;
       for (k = 0; k < 0x1000; k++) w[k] = 0u; }
 
-    /* I/O + serial bring-up, faithful to STF start_again_ip (_disable_ints).
-     * REAL-HARDWARE init: in MAME the 8251 is a separate chip and the 315-5649's
-     * extended regs (0x24 / 0x34-0x3A) are unmapped (and 0x40 is nopw), so all of
-     * this is inert there — but silicon needs it. */
+    /* Aux-serial bring-up (i8251 at 0x01C80000), faithful to STF start_again_ip.
+     * Inert in MAME's default hookup but needed on real hardware. (An STF-derived
+     * 315-5649 "SEGA" bring-up sequence — writes to unmapped regs 0x24/0x34-0x3A/
+     * 0x40 — used to live here too; removed as unverified, MAME ignores it and it
+     * has never been tested on silicon.) */
     {
         volatile u16 *uart_ctl = (volatile u16 *)0x01C80002u;  /* i8251 control reg */
         volatile int d;
@@ -403,11 +412,6 @@ M2_API void m2_init(void) {
         *uart_ctl = 0x40; for (d = 4; d > 0; d--) { }   /* internal reset  */
         *uart_ctl = 0x4E; for (d = 4; d > 0; d--) { }   /* mode: 8-N-1 x16 */
         *uart_ctl = 0x37;                                /* command: TxEN|RxEN */
-        /* 315-5649 handshake: enable<-0, hs<-1, then the "SEGA" signature (replaces an
-         * old M2_IO_ENABLE=1, which wrote the 0x40 reg with the wrong value per STF). */
-        M2_IO.enable = 0x00;
-        M2_IO.hs     = 0x01;
-        M2_IO.sig0 = 'S'; M2_IO.sig1 = 'E'; M2_IO.sig2 = 'G'; M2_IO.sig3 = 'A';
     }
 
     M2_WRITE_TWICE(M2_IRQ_ENA, M2_IRQ_VBL);  /* enable vblank source (g14 shim, m2_workaround.h) */

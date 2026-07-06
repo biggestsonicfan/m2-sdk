@@ -24,7 +24,18 @@ typedef struct {
     u8  _g1a[0x1C0];           /* 0x0090..0x024F                                                         */
     u32 texram_ptr[4];         /* 0x0250  STF wait_data texram bank pointers — the boot writes
                                 *         {sheet window, TEXRAM_0_1, TEXRAM_1, M2_LUMARAM}               */
-    u8  _g1b[0xCA0];           /* 0x0260..0x0EFF                                                         */
+    u8  _g1b_a[0x4A0];         /* 0x0260..0x06FF                                                         */
+    /* STF read_sw/write_sw/io_request_chk work-RAM (rom_code1.s labels; m2_swio.h). Active-HIGH
+     * held bitmask packs system(IN0)@byte0, P1(IN1)@byte1, P2(IN2)@byte2, coin/service@byte3. */
+    u32 in_held;               /* 0x0700  INTERUPT_FLAGS_HELD — held this frame (active-high)            */
+    u32 in_momentary;          /* 0x0704  INTERUPT_FLAGS_MOMENTARY — newly pressed this frame            */
+    u32 in_momen_on_rel;       /* 0x0708  INTERUPT_FLAGS_MOMEN_ON_REL — released this frame              */
+    u32 in_held_prev;          /* 0x070C  INTERUPT_FLAGS_HELD_PREV_FRAME                                 */
+    u32 io_prev0;              /* 0x0710  read_sw 0x500710 — masked ~IN[0x0C], this frame                */
+    u32 io_prev1;              /* 0x0714  read_sw 0x500714 — previous frame's io_prev0                   */
+    u8  coin_flags; u8 _pc[3]; /* 0x0718  COIN_INTERUPT_FLAGS (0 = INSERT COINS; write_sw output)        */
+    u8  analog_ram[8];         /* 0x071C  analog_to_digital_ram — 8 ADC channels (read_analog_to_ram)    */
+    u8  _g1b_b[0x7DC];         /* 0x0724..0x0EFF                                                         */
     u8  wait_data;             /* 0x0F00  STF wait_data mode byte (the boot writes 2)                    */
     u8  _g1c[0xFF];            /* 0x0F01..0x0FFF                                                         */
     u8  poly_bank;  u8 _p[3];  /* 0x1000  change_poly_bank cache (low byte of the COP poly bank)         */
@@ -39,6 +50,9 @@ typedef struct {
 _Static_assert(__builtin_offsetof(m2_mem_t, vsync)      == 0x0000, "m2_mem_t.vsync");
 _Static_assert(__builtin_offsetof(m2_mem_t, timer_flag) == 0x008C, "m2_mem_t.timer_flag");
 _Static_assert(__builtin_offsetof(m2_mem_t, texram_ptr) == 0x0250, "m2_mem_t.texram_ptr");
+_Static_assert(__builtin_offsetof(m2_mem_t, in_held)    == 0x0700, "m2_mem_t.in_held");
+_Static_assert(__builtin_offsetof(m2_mem_t, coin_flags) == 0x0718, "m2_mem_t.coin_flags");
+_Static_assert(__builtin_offsetof(m2_mem_t, analog_ram) == 0x071C, "m2_mem_t.analog_ram");
 _Static_assert(__builtin_offsetof(m2_mem_t, wait_data)  == 0x0F00, "m2_mem_t.wait_data");
 _Static_assert(__builtin_offsetof(m2_mem_t, poly_bank)  == 0x1000, "m2_mem_t.poly_bank");
 _Static_assert(__builtin_offsetof(m2_mem_t, buff_add)   == 0x1004, "m2_mem_t.buff_add");

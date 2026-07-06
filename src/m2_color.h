@@ -119,9 +119,12 @@ static void m2_color_init(void) {
     ((volatile u16 *)M2_PALRAM)[1] = 0xFFFFu;   /* pen 1 = white: STF's stable STAGE high word     */
 }
 
-/* Assign a polygon colorbase slot a BGR555 hue (read at palram[colorbase+0x1000]). */
+/* Assign a polygon colorbase slot a BGR555 hue (read at palram[colorbase+0x1000]).
+ * colorbase 0 maps to "Palette 0", which Polygon Color RAM (Fig 4-4) reserves as a space that
+ * "cannot be used" — writing it never displays, so reject it rather than silently no-op on silicon. */
 static void m2_setcolor(u32 colorbase, u16 bgr555) {
-    ((volatile u16 *)M2_PALRAM)[(colorbase + 0x1000u) & 0xffffu] = bgr555;
+    if ((colorbase & 0x3ffu) == 0u) return;     /* Palette 0 reserved (Fig 4-4) */
+    ((volatile u16 *)M2_PALRAM)[(colorbase + 0x1000u) & 0xffffu] = (u16)(bgr555 | M2_PAL_SET);
 }
 
 /* init_pol_color (STF @0x11c24): load STF's full 1024-colour polygon colorbase

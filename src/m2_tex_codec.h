@@ -77,35 +77,33 @@ static void tex_make_huf(int depth, u32 node_addr, u32 prefix) {
     } else { tex_make_huf(d1, a1, prefix1); }
 }
 
-/* Decode ONE texture (128x128 etc.) into sheet (16-bit texels, 0x400-byte row stride). The bit reader
- * is a STATIC local so the bitstream can be CONTINUED across tiles of one page:
- *   src_addr != 0 starts a new bitstream; src_addr == 0 continues the current one. */
-static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
-    static texbr_t br;
+/* Compressed-page header (one per tile). tex_read_header fills it; the fields drive every
+ * later stage. rows/cols are the tile dims; nodes/nB size table-A/B; r6/term feed the decoder. */
+typedef struct { u32 rows, cols, nbitsA, nA, nB, r6, term, nodes; } tex_hdr_t;
+
+/* Read the page header off the bitstream and publish the tile dims for the mip builder.
+ * Returns 1 if nodes/nB would overflow the scratch buffers (caller aborts), else 0. */
+static int tex_read_header(texbr_t *b, tex_hdr_t *h) {
+    h->rows   = (texbr_get(b, 8) + 1) >> 1;
+    h->cols   = (texbr_get(b, 8) + 1) >> 1;
+    (void)(h->rows * h->cols);                 /* dword_55C324 (unused here) */
+    h->nbitsA = texbr_get(b, 8);
+    h->nA     = texbr_get(b, 16);
+    (void)texbr_get(b, 16);                    /* dword_55C334 */
+    h->nB     = texbr_get(b, 16);
+    h->r6     = texbr_get(b, 4);
+    h->term   = texbr_get(b, 16);
+    h->nodes  = (h->nA << 1) - 1;
+    g_tex_w = h->cols; g_tex_h = h->rows;      /* publish tile dims for the mip builder */
+    return (h->nodes > 2048 || h->nB > 512) ? 1 : 0;   /* guard scratch buffers */
+}
+
+/* table-A: decode `nodes` symbols (nbitsA each) into g_texA, folding the classify LUT (ROM). */
+static void tex_build_table_a(texbr_t *b, u32 nodes, u32 nbitsA) {
     const volatile u32 *classify = (const volatile u32 *)TEX_CLASSIFY_ROM;
-    u32 rows, cols, nbitsA, nA, nB, r6, term, nodes, i;
-    u32 r12, r8 = 0, r7 = 0, nout = 0;
-    int rows_left, cols_left;
-
-    if (src_addr) texbr_init(&br, (const u8 *)src_addr);
-
-    /* ---- header ---- */
-    rows   = (texbr_get(&br, 8) + 1) >> 1;
-    cols   = (texbr_get(&br, 8) + 1) >> 1;
-    (void)(rows * cols);                       /* dword_55C324 (unused here) */
-    nbitsA = texbr_get(&br, 8);
-    nA     = texbr_get(&br, 16);
-    (void)texbr_get(&br, 16);                  /* dword_55C334 */
-    nB     = texbr_get(&br, 16);
-    r6     = texbr_get(&br, 4);
-    term   = texbr_get(&br, 16);
-    nodes  = (nA << 1) - 1;
-    g_tex_w = cols; g_tex_h = rows;            /* publish tile dims for the mip builder */
-    if (nodes > 2048 || nB > 512) return 1;    /* guard scratch buffers */
-
-    /* ---- table-A (classify LUT from ROM) ---- */
+    u32 i;
     for (i = 0; i < nodes; i++) {
-        u32 v = texbr_get(&br, nbitsA), node;
+        u32 v = texbr_get(b, nbitsA), node;
         if (v >= 0x142) {
             node = TEXBASE + ((v - 0x142) << 2);               /* abs ptr (nonzero base) */
         } else if (v < 0x100) {
@@ -122,17 +120,22 @@ static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
         }
         g_texA[i] = node;
     }
-    /* ---- table-B ---- */
-    for (i = 0; i < nB; i++) { u32 hi = texbr_get(&br, 16), lo = texbr_get(&br, 4); g_texB[i] = (hi << 8) | lo; }
+}
 
-    /* ---- make_huf ---- */
-    tex_make_huf(0, TEXBASE, 0);
+/* table-B: `nB` (hi16,lo4) value pairs -> g_texB. */
+static void tex_build_table_b(texbr_t *b, u32 nB) {
+    u32 i;
+    for (i = 0; i < nB; i++) { u32 hi = texbr_get(b, 16), lo = texbr_get(b, 4); g_texB[i] = (hi << 8) | lo; }
+}
 
-    /* ---- decode loop -> RLE stream g_texRLE[] ---- */
-    r12 = (1u << r6) - 1u;
-    rows_left = (int)rows; cols_left = (int)cols;
+/* Stage 1 (unpack_lod_data): Huffman-decode the bitstream into the RLE intermediate stream
+ * g_texRLE[] (+ parallel 4-bit shade g_texRLEsh[]). Returns the entry count (nout).
+ * The >8-bit-code tree-walk carries a gcc960 -O2 miscompile barrier — see the note inline. */
+static u32 tex_decode_rle(texbr_t *b, u32 rows, u32 cols, u32 r6, u32 term) {
+    u32 r12 = (1u << r6) - 1u, r8 = 0, r7 = 0, nout = 0;
+    int rows_left = (int)rows, cols_left = (int)cols;
     for (;;) {
-        u32 g0 = br.r13 & 0xFF, fw0 = g_texFast0[g0];
+        u32 g0 = b->r13 & 0xFF, fw0 = g_texFast0[g0];
         u8 handler = g_texFastH[g0];
         int g4 = (int)fw0;
         if (g4 >= 0) {
@@ -140,9 +143,9 @@ static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
             u32 g3 = (u32)g4; int r4 = 8;
             for (;;) {
                 int nw = (int)TEXA_W(g3);
-                u32 bit = (br.r13 >> r4) & 1u; r4++;
+                u32 bit = (b->r13 >> r4) & 1u; r4++;
                 /* gcc960 -O2 miscompiles this tree-walk (hoists/fuses the per-iter
-                 * br.r13 read + nw sign test), making the walk resolve to the wrong
+                 * b->r13 read + nw sign test), making the walk resolve to the wrong
                  * leaf -> every code >8 bits decodes as a literal. This barrier forces
                  * nw/bit/g3 to materialize each iteration. Do NOT remove. */
                 __asm__ __volatile__("" : "+r"(nw), "+r"(bit), "+r"(g3) : : "memory");
@@ -150,16 +153,16 @@ static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
                 else     { if (nw >= 0) { g3 = g3 + 4;  continue; } else { g4 = nw; break; } }
             }
             handler = (u8)(((u32)g4) >> 28);
-            texbr_get(&br, r4 - 1);
+            texbr_get(b, r4 - 1);
         } else {
             u32 length = (((u32)g4) >> 24) & 0xF;
-            texbr_get(&br, length);
+            texbr_get(b, length);
             /* handler already = g_texFastH[g0] (= tag) */
         }
 
         /* dispatch (tags: 8=H8,9=H9,0xA=HA,0xB=HB,0xC/0xD=HC). NUM[0..7] never occur. */
         if (handler == 9) {                              /* loc_4BA2C */
-            u32 idx = br.r13 & r12; texbr_get(&br, r6);
+            u32 idx = b->r13 & r12; texbr_get(b, r6);
             g4 = (int)g_texB[idx]; handler = 8;          /* fallthrough */
         }
         if (handler == 8) {                              /* loc_4BA5C */
@@ -179,7 +182,7 @@ static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
             g_texRLE[nout++] = (u16)(((r7 << 8) | ((u32)g4 & 0xFF)) & 0xFFFF);
             if (cols_left == 0) goto row_end;
         } else if (handler == 0xA) {                     /* sub_4BB30 literal2 */
-            u32 g2 = texbr_get(&br, 16), g1 = texbr_get(&br, 4);
+            u32 g2 = texbr_get(b, 16), g1 = texbr_get(b, 4);
             r8 = (r8 + g1) & 0xF; r7 = (r8 * 0x1111u) & 0xFFFF;
             g_texRLEsh[nout] = (u8)r8;
             g_texRLE[nout++] = (u16)((g2 + r7) & 0xFFFF);
@@ -192,36 +195,56 @@ static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
         cols_left = (int)cols;
         if (nout >= 16384 - 2) break;
     }
+    return nout;
+}
 
-    /* ---- stage 2: expand the RLE stream to the sheet (send_lod_data) ---- */
-    {
-        u32 si = 0, row; u16 g2; u8 shc;
-        if (nout == 0) return 0;
-        shc = g_texRLEsh[si]; g2 = g_texRLE[si]; si++;
-        for (row = 0; row < rows; row++) {
-            volatile u16 *dst = sheet + (row * (0x400u / 2u));   /* 0x400-byte stride */
-            u8 *shd = g_tex_shade + row * cols;                  /* parallel shade row (cols wide) */
-            int n = (int)cols;
-            for (;;) {
-                n--;
-                if (g2 == (u16)term) {                  /* run */
-                    u16 g1 = g_texRLE[si]; u8 rsh = g_texRLEsh[si]; si++;
-                    u16 val = (g1 >> 8) & 0xFF; val |= (val << 8);
-                    int rl = g1 & 0xFF, k;
-                    n += 1; n -= rl;
-                    for (k = 0; k < (rl >= 1 ? rl : 1); k++) { *dst++ = val; *shd++ = rsh; }
-                    shc = g_texRLEsh[si]; g2 = g_texRLE[si]; si++;
-                    if (n > 0) continue; else break;
-                } else {                                /* literal */
-                    *dst++ = g2; *shd++ = shc;
-                    shc = g_texRLEsh[si]; g2 = g_texRLE[si]; si++;
-                    if (n > 0) continue; else break;
-                }
-                if (si >= nout) break;
+/* Stage 2 (send_lod_data): expand the RLE stream to the sheet (16-bit texels @ 0x400-byte row
+ * stride) and the parallel per-texel shade to g_tex_shade. */
+static void tex_expand_rle(u32 nout, u32 rows, u32 cols, u32 term, volatile u16 *sheet) {
+    u32 si = 0, row; u16 g2; u8 shc;
+    if (nout == 0) return;
+    shc = g_texRLEsh[si]; g2 = g_texRLE[si]; si++;
+    for (row = 0; row < rows; row++) {
+        volatile u16 *dst = sheet + (row * (0x400u / 2u));   /* 0x400-byte stride */
+        u8 *shd = g_tex_shade + row * cols;                  /* parallel shade row (cols wide) */
+        int n = (int)cols;
+        for (;;) {
+            n--;
+            if (g2 == (u16)term) {                  /* run */
+                u16 g1 = g_texRLE[si]; u8 rsh = g_texRLEsh[si]; si++;
+                u16 val = (g1 >> 8) & 0xFF; val |= (val << 8);
+                int rl = g1 & 0xFF, k;
+                n += 1; n -= rl;
+                for (k = 0; k < (rl >= 1 ? rl : 1); k++) { *dst++ = val; *shd++ = rsh; }
+                shc = g_texRLEsh[si]; g2 = g_texRLE[si]; si++;
+                if (n > 0) continue; else break;
+            } else {                                /* literal */
+                *dst++ = g2; *shd++ = shc;
+                shc = g_texRLEsh[si]; g2 = g_texRLE[si]; si++;
+                if (n > 0) continue; else break;
             }
             if (si >= nout) break;
         }
+        if (si >= nout) break;
     }
+}
+
+/* Decode ONE texture (128x128 etc.) into sheet (16-bit texels, 0x400-byte row stride). The bit reader
+ * is a STATIC local so the bitstream can be CONTINUED across tiles of one page:
+ *   src_addr != 0 starts a new bitstream; src_addr == 0 continues the current one. */
+static int tex_decode_into(u32 src_addr, volatile u16 *sheet) {
+    static texbr_t br;
+    tex_hdr_t h;
+    u32 nout;
+
+    if (src_addr) texbr_init(&br, (const u8 *)src_addr);
+
+    if (tex_read_header(&br, &h)) return 1;      /* header + scratch-buffer guard */
+    tex_build_table_a(&br, h.nodes, h.nbitsA);   /* classify LUT -> g_texA          */
+    tex_build_table_b(&br, h.nB);                /* value LUT    -> g_texB          */
+    tex_make_huf(0, TEXBASE, 0);                 /* fast-table for codes <=8 bits    */
+    nout = tex_decode_rle(&br, h.rows, h.cols, h.r6, h.term);   /* stage 1: -> RLE   */
+    tex_expand_rle(nout, h.rows, h.cols, h.term, sheet);        /* stage 2: -> sheet */
     return 0;
 }
 
@@ -247,6 +270,29 @@ static const u16 g_tex_lutx[24] = {0,256,512,768, 0,256,512,768, 0,256,512,768,
                                    0,256,512,768, 0,256, 0,256, 0,256, 0,256};
 static const u16 g_tex_luty[24] = {0,0,0,0, 256,256,256,256, 512,512,512,512,
                                    768,768,768,768, 1024,1024, 1280,1280, 1536,1536, 1792,1792};
+
+/* sub_4C444 core, but with the LOD0 bank (r9) and its mip-partner (r10) passed in explicitly.
+ * The stock STF pair is (TEXRAM_0_1, TEXRAM_1) selected by parity; callers that want a DIFFERENT
+ * bank pair (e.g. the common sheet into the otherwise-unused texram_0 @ 0x10F00000, off the
+ * environment banks) pass their own r9/r10. LOD0 lands at r9; mips ping-pong r9<->r10. */
+static void tex_mip_dests_banks(u32 texx, u32 texy, u32 r9, u32 r10, u32 mip[10]) {
+    u32 r3, g6 = texx, g7 = texy, r6 = 0, r7 = 0, t, tmp;
+    int i, r8;
+    if (!((texy >> 10) & 1u)) {                       /* common case */
+        r3 = (texx << 9) + texy; mip[0] = r9 + r3; tmp = r9; r9 = r10; r10 = tmp;
+    } else if (!((texx >> 9) & 1u)) {                 /* texy page-carry */
+        r3 = ((0x400u + texx) << 9) + (texy & ~0x400u); mip[0] = r9 + r3; tmp = r9; r9 = r10; r10 = tmp;
+    } else {                                          /* both-high: skip LOD0 store */
+        g7 = (texy & ~0x400u) << 1; g6 = (texx & ~0x200u) << 1; mip[0] = 0;
+    }
+    r9 += 0xC0000u; r10 += 0xC0000u;
+    for (i = 1, r8 = 9; i < 10; i++, r8--) {
+        g6 >>= 1; g7 >>= 1; g6 &= ~1u; g7 &= ~1u;
+        r3 = ((r6 + g6) << 9) + (r7 + g7);
+        mip[i] = r9 + r3; tmp = r9; r9 = r10; r10 = tmp;
+        t = 1u << r8; r7 += t; r6 += t >> 1;
+    }
+}
 
 /* sub_4C444: fill mip[0..9] with absolute byte dests. parity picks the LOD0 bank (and banks
  * ping-pong each level); +0xC0000 = mip region; coords halve+floor-even per level. */
@@ -320,6 +366,34 @@ static void tex_load_atlas(u32 page, u32 mode) {
         tex_mip_dests(texx, texy, parity, mip);
         if (mip[0] == 0u) continue;                       /* both-high tile: skip for now */
         tex_decode_page(blk + 4u, (volatile u16 *)mip[0]);/* LOD0 (data starts after the flag word) */
+        tex_build_mips(mip);
+    }
+}
+
+/* Load a page into a caller-chosen bank pair (LOD0 -> bank_a, mips ping-pong bank_a<->bank_b),
+ * forcing a FIXED bank instead of the g2-parity choice — so two sheets that share tile-grid
+ * coords can live in DISJOINT texram (e.g. common sheet -> texram_0, environment -> texram_1)
+ * without clobbering each other. Pass bank_a == bank_b to keep an entire sheet within one bank. */
+static void tex_load_atlas_banks(u32 page, u32 bank_a, u32 bank_b) {
+    u32 HDR_TABLE = *(volatile u32 *)STF_TEX_HDR_TABLE_PTR;
+    u32 DATA_TABLE = *(volatile u32 *)STF_TEX_DATA_TABLE_PTR;
+    u32 P = *(volatile u32 *)(HDR_TABLE + page * 4u);
+    u32 s = *(volatile u32 *)P;
+    const volatile u32 *dptr = (const volatile u32 *)(P + 4u);
+    u32 D = *(volatile u32 *)(DATA_TABLE + s * 4u);
+    u32 count = *(volatile u32 *)D;
+    const volatile u32 *hdrw = (const volatile u32 *)(D + 4u);
+    u32 i, mip[10];
+    if (count > 24u) count = 24u;
+    for (i = 0; i < count; i++) {
+        u32 g2 = hdrw[i], blk = dptr[i], idx, texx, texy;
+        if (blk == 0u) continue;
+        idx = (g2 >> 1) & 0x7FFFu; if (idx > 23u) continue;
+        texx = (u32)g_tex_lutx[idx] + (g2 >> 24);
+        texy = (u32)g_tex_luty[idx] + ((g2 >> 16) & 0xFFu);
+        tex_mip_dests_banks(texx, texy, bank_a, bank_b, mip);
+        if (mip[0] == 0u) continue;
+        tex_decode_page(blk + 4u, (volatile u16 *)mip[0]);
         tex_build_mips(mip);
     }
 }

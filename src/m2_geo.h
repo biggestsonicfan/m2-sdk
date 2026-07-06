@@ -120,6 +120,18 @@ static void geo_object_from_table(u32 n) {
     geo_object(e[0], e[1], e[2], 0x200u);
 }
 
+/* polygon_data (GEO cmd 0x05): copy `n` object_data words into polygon RAM at word index
+ * `addr` (addr bit24 = fast polygon_ram1, else slow polygon_ram0), then instance them with
+ * geo_object(tpa, tha, oba=addr, obc=unit_count). This is how you draw a SELF-AUTHORED mesh
+ * (SEGA Fig 9-5 units: {attr | Nx,Ny,Nz | P0 | P1}, mode NP_NS) instead of a ROM model.
+ * CAVEAT: the real cpres2 GEO streams OBJECT meshes from the polygons ROM only, so a custom
+ * polygon-RAM mesh renders under MAME's HLE geo_parse — NOT under M2_HLE_GEO_OFF. See
+ * memory/custom-object-data-mesh. */
+static void geo_polygon_data(u32 addr, const u32 *data, u32 n) {
+    u32 i; geo__w(GEO_OP_POLYDATA); geo__w(addr); geo__w(n);
+    for (i = 0; i < n; i++) geo__w(data[i]);
+}
+
 /* ---- custom vector geometry via direct_data (cmd 0x02) -------------------- *
  * Emit flat-colored polygons/lines. Coords are IEEE-754 floats (process_polygon
  * reads u2f(word<<8)). NOTE: direct_data is projected as screen = center + x/z
@@ -139,13 +151,26 @@ static void geo_object_from_table(u32 n) {
  * (e.g. 456) carry textured faces, so on the real GEO a textured header paired with a
  * TEXRAM pre-filled to a uniform opaque luma yields a clean flat colorbase fill. An
  * untextured th0=0 made the textured model sample garbage TEXRAM = stripe noise on silicon
- * (it only looked flat on MAME's lenient HLE). See memory/geo-texram-rendering. */
+ * (it only looked flat on MAME's lenient HLE). See memory/geo-texram-rendering.
+ * REQUIRED once at startup: geo_fill_color_patch() fills the texram region th2 points at. */
 static void geo_color_header(u32 cb) {
     geo__w(GEO_OP_TEXDATA);
     geo__w(GEO_TEXRAM_BIT | (cb * 4u));
     geo__w(4u);
-    geo__w(0x4012u); geo__w(0u); geo__w(0u);  /* th0=textured 128x128, th1=lumabase0, th2=(0,0) */
-    geo__w((cb & 0x3ffu) << 6);               /* th3: colorbase = (th3>>6)&0x3ff */
+    geo__w(M2_TH0_TEX | M2_TH0_MAPX(2u) | M2_TH0_MAPY(2u)); geo__w(0u); geo__w(0u);  /* th0=textured 128x128, th1=lumabase0, th2=(0,0) */
+    geo__w(M2_TH3_COLORBASE(cb));             /* th3: colorbase = (th3>>6)&0x3ff */
+}
+
+/* Fill the uniform-luma patch geo_color_header samples — sheet-0 texram (0,0)..(128,128),
+ * opaque texel 0xE. Call ONCE at startup (after the GEO/colour boot) so the display-list
+ * flat-colour path (geo_color_header + geo_quad_emit) renders a clean flat fill on the real
+ * GEO instead of sampling garbage. (m2_obj.h has its own patch at (0,896) for the COP path;
+ * this one matches geo_color_header's th2=(0,0).) */
+static void geo_fill_color_patch(void) {
+    int x, y;
+    for (y = 0; y < 128; y++)
+        for (x = 0; x < 128; x++)
+            m2_texram0_texel(x, y, 0xEu);
 }
 
 /* Flat-colored quad (v0,v1,v2,v3 cyclic). */
@@ -156,7 +181,7 @@ static void geo_quad(const float v0[3], const float v1[3],
     geo__w(GEO_TEXRAM_BIT | (cb * 4u));
     geo__w(geo__f(v1[0])); geo__w(geo__f(v1[1])); geo__w(geo__f(v1[2]));
     geo__w(geo__f(v0[0])); geo__w(geo__f(v0[1])); geo__w(geo__f(v0[2]));
-    geo__w(1u | (1u << 8) | (1u << 17));    /* quad, linktype 1, doubleside */
+    geo__w(M2_POLY_QUAD | M2_POLY_LINK1 | M2_POLY_DOUBLE);
     geo__w(0xFFu << 23);                    /* object.luma = 0xFF */
     geo__w(0u);
     geo__w(geo__f(v2[0])); geo__w(geo__f(v2[1])); geo__w(geo__f(v2[2]));

@@ -79,7 +79,7 @@ static void g2d__quad(const float v0[3], const float v1[3],
     g2d__w(G2D_TEXRAM_BIT | (cb * 4u));
     g2d__w(g2d__f(v1[0])); g2d__w(g2d__f(v1[1])); g2d__w(g2d__f(v1[2]));
     g2d__w(g2d__f(v0[0])); g2d__w(g2d__f(v0[1])); g2d__w(g2d__f(v0[2]));
-    g2d__w(1u | (1u << 8) | (1u << 17));      /* quad, linktype 1, doubleside */
+    g2d__w(M2_POLY_QUAD | M2_POLY_LINK1 | M2_POLY_DOUBLE);
     g2d__w(0xFFu << 23);                       /* luma full */
     g2d__w(0u);
     g2d__w(g2d__f(v2[0])); g2d__w(g2d__f(v2[1])); g2d__w(g2d__f(v2[2]));
@@ -123,7 +123,7 @@ static void g2d_color(u32 cb, u16 bgr555) {
 static void g2d_begin(void) {
     u32 cb;
     g2d__n = 0;
-    g2d__w(G2D_OP_ZSORT); g2d__w(0x40800000u);
+    g2d__w(G2D_OP_ZSORT); g2d__w(M2_ZSORT_COARSE);
     g2d__w(G2D_OP_MODE);  g2d__w(3u);
     g2d__w(G2D_OP_MODE);  g2d__w(1u);
     g2d__w(G2D_OP_TEXPARAM); g2d__w(0u); g2d__w(0x20u);
@@ -245,10 +245,10 @@ static void g2d_text(float x, float y, const char *s, u32 cb) { g2d_text_scaled(
 /* write a 4-word texture header into GEO texture_ram at hdr (cmd 0x04). */
 static void g2d_tex_header(u32 hdr, int texx, int texy, int wbits, int hbits,
                            int sheet1, u32 colorbase, u32 lumabase) {
-    u32 th0 = 0x4000u | ((u32)wbits & 7) | (((u32)hbits & 7) << 3);   /* bit14=textured */
-    u32 th1 = lumabase & 0xffu;
-    u32 th2 = ((u32)(texx / 32) & 0x3f) | (((u32)(texy / 32) & 0x1f) << 6) | (sheet1 ? 0x1000u : 0);
-    u32 th3 = (colorbase & 0x3ffu) << 6;
+    u32 th0 = M2_TH0_TEX | M2_TH0_MAPX((u32)wbits) | M2_TH0_MAPY((u32)hbits);
+    u32 th1 = M2_TH1_LUMABASE(lumabase);
+    u32 th2 = M2_TH2_TILE((u32)texx, (u32)texy) | (sheet1 ? M2_TH2_SHEET1 : 0u);
+    u32 th3 = M2_TH3_COLORBASE(colorbase);
     g2d__w(G2D_OP_TEXDATA); g2d__w(G2D_TEXRAM_BIT | hdr); g2d__w(4u);
     g2d__w(th0); g2d__w(th1); g2d__w(th2); g2d__w(th3);
 }
@@ -375,7 +375,7 @@ static void g2d_vquadl(const float v0[3], const float v1[3],
     g2d__w(G2D_TEXRAM_BIT | (cb * 4u));
     g2d__w(g2d__f(v1[0])); g2d__w(g2d__f(v1[1])); g2d__w(g2d__f(v1[2]));
     g2d__w(g2d__f(v0[0])); g2d__w(g2d__f(v0[1])); g2d__w(g2d__f(v0[2]));
-    g2d__w(1u | (1u << 8) | (1u << 17));      /* quad, linktype 1, doubleside */
+    g2d__w(M2_POLY_QUAD | M2_POLY_LINK1 | M2_POLY_DOUBLE);
     g2d__w((luma & 0xFFu) << 23);
     g2d__w(0u);
     g2d__w(g2d__f(v2[0])); g2d__w(g2d__f(v2[1])); g2d__w(g2d__f(v2[2]));
@@ -433,8 +433,8 @@ static u32 g2d_luma(float nx, float ny, float nz, float lx, float ly, float lz) 
  * are coplanar: at COARSE granularity they land in the same bucket, TIE, and the
  * panel hides the line. Call g2d_zsort_fine() right after g2d_begin() so a small
  * forward Z bias on the lines reliably wins. (Learned porting Tempest's shaded tube.) */
-#define G2D_ZSORT_COARSE 0x40800000u   /* ~4.0  — 2D painter's order            */
-#define G2D_ZSORT_FINE   0x3C23D70Au   /* ~0.01 — 3D coplanar overlay separation */
+#define G2D_ZSORT_COARSE M2_ZSORT_COARSE   /* ~4.0  — 2D painter's order            */
+#define G2D_ZSORT_FINE   M2_ZSORT_FINE     /* ~0.01 — 3D coplanar overlay separation */
 static void g2d_zsort(u32 mode) { g2d__w(G2D_OP_ZSORT); g2d__w(mode); }
 static void g2d_zsort_fine(void) { g2d_zsort(G2D_ZSORT_FINE); }
 

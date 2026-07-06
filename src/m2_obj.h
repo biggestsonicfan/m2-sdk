@@ -39,7 +39,34 @@
 #define M2_FLAT_QUAD_MODEL 456u   /* STF model-table flat quad (1 face, 12x12, normal +Y, +-6 in XZ) */
 #define M2_MODEL_TABLE     0x020E0004u  /* model n's 4-word header {tpa,tha,oba,obc} at +n*16        */
 
+/* Model header (4 words @ M2_MODEL_TABLE + model*16): [0]=uv/tpa, [1]=material/tha, [2]=mesh/oba,
+ * [3]=counts (low 16 bits = emitted face count). Material stream = M2_MAIN_DATA + tha*2, one 8-byte
+ * (4x u16) record per face: th0/th1/th2/th3. (Format decoded from m2-hle2 geo3d_decode_model.) */
+#define M2_MDL_MAT(hdr4)    ((volatile const u16 *)(M2_MAIN_DATA + (hdr4)[1] * 2u)) /* material stream */
+#define M2_MDL_NFACES(hdr4) ((hdr4)[3] & 0xFFFFu)                                   /* emitted faces  */
+#define M2_MAT_TEXTURED(th0) ((th0) & 0x4000u)          /* th0 bit14 = textured (else flat)          */
+#define M2_MAT_SHEET(th2)    (((th2) >> 12) & 1u)        /* th2 bit12 = texram sheet select           */
+#define M2_MAT_COLORBASE(th3)(((th3) >> 6) & 0x3FFu)     /* th3>>6 = colorbase (palette / palram idx) */
+
 static u32 m2_obj_fb(float f){ union{float f;u32 u;}x; x.f=f; return x.u; }  /* float -> IEEE bits */
+
+/* Populate polygon Color RAM with a model's REAL per-face palette — the send_tex_col stand-in.
+ * STF character/object models (e.g. Pengo 4311/4312) reference many colorbases (th3 matidx) whose
+ * palram entries a bare kernel never fills, so their faces render BLACK. Walk the model's material
+ * stream, and for each referenced colorbase copy its BGR555 from the polygon-palette ROM
+ * (M2_POLY_PAL + cb*2, SET bit already set) into palram[cb+0x1000]. Call once before drawing the
+ * model; cheap (<=~96 faces). Works for any STF model, textured or flat. */
+static void m2_load_model_palette(u32 model) {
+    volatile const u32 *hdr = (volatile const u32 *)(M2_MODEL_TABLE + model * 16u);
+    volatile const u16 *mat = M2_MDL_MAT(hdr);
+    volatile const u16 *pal = (volatile const u16 *)M2_POLY_PAL;
+    u32 nfaces = M2_MDL_NFACES(hdr), f;
+    for (f = 0u; f < nfaces; f++) {
+        u32 cb = M2_MAT_COLORBASE(mat[f * 4u + 3u]);
+        if (cb == 0u) continue;                          /* colorbase 0 reserved (Fig 4-4) */
+        *(volatile u16 *)(M2_PALRAM + (cb + 0x1000u) * 2u) = (u16)(pal[cb] | M2_PAL_SET);
+    }
+}
 
 /* m2_silicon_boot() — the one-call bring-up — lives in m2_boot.h (included above). */
 
@@ -53,7 +80,7 @@ static u32 m2_obj_fb(float f){ union{float f;u32 u;}x; x.f=f; return x.u; }  /* 
 #ifndef M2_OBJ_PATCH_Y
 #define M2_OBJ_PATCH_Y 896u
 #endif
-#define M2_OBJ_PATCH_TH2 (((M2_OBJ_PATCH_X/32u)&0x3fu) | (((M2_OBJ_PATCH_Y/32u)&0x1fu)<<6))
+#define M2_OBJ_PATCH_TH2 M2_TH2_TILE(M2_OBJ_PATCH_X, M2_OBJ_PATCH_Y)
 
 static int m2__obj_patch_done = 0;
 /* texel write is shared: m2_texram0_texel (m2font.h). */
@@ -74,8 +101,8 @@ static void m2_obj_color_header(u32 cb) {
     *fifo = GEO_OP_TEXDATA;
     *fifo = GEO_TEXRAM_BIT | (cb * 4u);         /* dest = texram header slot cb*4 */
     *fifo = 4u;                                 /* 4 header words */
-    *fifo = 0x4012u; *fifo = 0u; *fifo = (u32)M2_OBJ_PATCH_TH2;  /* th0=textured128, th1=0, th2=patch */
-    *fifo = (cb & 0x3ffu) << 6;                 /* th3 = colorbase */
+    *fifo = M2_TH0_TEX | M2_TH0_MAPX(2u) | M2_TH0_MAPY(2u); *fifo = 0u; *fifo = (u32)M2_OBJ_PATCH_TH2;  /* th0=textured128, th1=0, th2=patch */
+    *fifo = M2_TH3_COLORBASE(cb);               /* th3 = colorbase */
 }
 
 /* ---- per-FRAME projection setup (run ONCE per frame after m2_frame_begin) ------------------------

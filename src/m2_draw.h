@@ -41,7 +41,7 @@ static int m2__shapes_loaded = 0;
 
 /* Set a colorbase's ink colour (BGR555). palram[cb+0x1000]'s 5-bit R/G/B pick the colorxlat row/channel. */
 static void m2_draw_color(u32 cb, u16 bgr555) {
-    *(volatile u16 *)(0x01800000u + (cb + 0x1000u) * 2u) = bgr555;
+    *(volatile u16 *)(0x01800000u + (cb + 0x1000u) * 2u) = (u16)(bgr555 | M2_PAL_SET);
 }
 
 /* Write the SOLID + CIRCLE shape textures into texram0 (once). ink=14, outside=0xf (transparent). */
@@ -104,7 +104,7 @@ static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz)
     /* render state is emitted ONCE per frame by m2_draw_frame_setup(); here just the header + quad */
     /* flat colorbase header at THIS cb's own tha slot (cb*4) */
     *fifo = GEO_OP_TEXDATA; *fifo = tha; *fifo = 4u;
-    *fifo = 0u; *fifo = 0u; *fifo = 0u; *fifo = (cb & 0x3ffu) << 6;
+    *fifo = 0u; *fifo = 0u; *fifo = 0u; *fifo = M2_TH3_COLORBASE(cb);
     /* the DIRECT quad: TR, TL, [polyHdr, luma, dist], BR, BL, sentinel */
     *fifo = GEO_OP_DIRECT;
     *fifo = 0u; *fifo = tha;
@@ -134,14 +134,14 @@ static void m2_direct_tquad_uv(float x, float y, float w, float h, u32 cb, float
                                u32 texx, u32 texy, u32 u0, u32 v0, u32 uw, u32 vh, u32 uvoff) {
     volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     u32 tha = GEO_TEXRAM_BIT | (cb * 4u), zf = m2__fb(pz);
-    u32 th2 = ((texx / 32u) & 0x3fu) | (((texy / 32u) & 0x1fu) << 6);
+    u32 th2 = M2_TH2_TILE(texx, texy);
     u32 pu0 = u0 << 3, pv0 = v0 << 3, pu1 = (u0 + uw) << 3, pv1 = (v0 + vh) << 3;
     float l = (x - 248.0f) * pz,  r = ((x + w) - 248.0f) * pz;
     float t = (192.0f - y) * pz,  b = (192.0f - (y + h)) * pz;
     /* render state is emitted ONCE per frame by m2_draw_frame_setup() */
     /* texture header (cb's slot) + per-vert UVs (v0 TL, v1 TR, v2 BR, v3 BL) */
     *fifo = GEO_OP_TEXDATA; *fifo = tha; *fifo = 4u;
-    *fifo = th0; *fifo = 0u; *fifo = th2; *fifo = (cb & 0x3ffu) << 6;
+    *fifo = th0; *fifo = 0u; *fifo = th2; *fifo = M2_TH3_COLORBASE(cb);
     *fifo = GEO_OP_TEXDATA; *fifo = GEO_TEXRAM_BIT | uvoff; *fifo = 8u;   /* texture_ram select bit (as header) */
     *fifo = pv0; *fifo = pu0;   /* v0 TL */
     *fifo = pv0; *fifo = pu1;   /* v1 TR */
@@ -175,9 +175,10 @@ static void m2_direct_tquad(float x, float y, float w, float h, u32 cb, float pz
 
 static void m2_fill_ellipse(float cx, float cy, float rx, float ry, u32 cb) {
     m2_shapes_init();
-    /* th0 = textured(bit14)+translucent(bit13) + 64x64 (wbits=1,hbits=1) = 0x6009 */
+    /* th0 = textured+translucent + 64x64 (wbits=1,hbits=1) = 0x6009 */
     m2_direct_tquad(cx - rx, cy - ry, rx * 2.0f, ry * 2.0f, cb, m2_text_z,
-                    0x6009u, M2_CIRC_X, M2_CIRC_Y, M2_CIRC_D, M2_CIRC_D);
+                    M2_TH0_TEX | M2_TH0_XLUC | M2_TH0_MAPX(1u) | M2_TH0_MAPY(1u),
+                    M2_CIRC_X, M2_CIRC_Y, M2_CIRC_D, M2_CIRC_D);
 }
 static void m2_fill_circle(float cx, float cy, float r, u32 cb) { m2_fill_ellipse(cx, cy, r, r, cb); }
 
@@ -222,8 +223,10 @@ static float m2_text_px_advance = 1.0f;   /* glyph advance as a fraction of the 
 static void m2_draw_glyph_px(float px, float py, float sz, u32 cb, u32 c) {
     u32 ax = (c & 15u) * 8u, ay = ((c >> 4) & 7u) * 8u;   /* glyph cell in the 128x64 (16x8) atlas */
     m2_font_atlas();
-    /* th0=0x600A: textured(bit14)+translucent(bit13) + 128 wide (wbits=2) + 64 tall (hbits=1). */
-    m2_direct_tquad_uv(px, py, sz, sz, cb, m2_text_z, 0x600Au, 0u, 0u, ax, ay, 8u, 8u, m2__guv_slot());
+    /* th0=0x600A: textured+translucent + 128 wide (wbits=2) + 64 tall (hbits=1). */
+    m2_direct_tquad_uv(px, py, sz, sz, cb, m2_text_z,
+                       M2_TH0_TEX | M2_TH0_XLUC | M2_TH0_MAPX(2u) | M2_TH0_MAPY(1u),
+                       0u, 0u, ax, ay, 8u, 8u, m2__guv_slot());
 }
 
 /* NUL-terminated string from screen pixel (px,py) top-left, sz px/glyph cell, ink colorbase cb. */

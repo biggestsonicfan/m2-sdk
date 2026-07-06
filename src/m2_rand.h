@@ -14,7 +14,10 @@
 #ifndef M2_RAND_H
 #define M2_RAND_H
 
-/* Free-running hardware timer counters: TIMERS_START, TIMER_02/03/04. */
+/* Free-running hardware timer counters: TIMERS_START, TIMER_02/03/04.
+ * NB these are STF one-shot COUNTDOWN timers: unless you program a period (a write to
+ * 0x00F00000..0F), they read ~static, so they are NOT a usable sub-frame stopwatch here.
+ * For on-device timing use the 60 Hz `frameVBL` counter (the vblank IRQ always ticks it). */
 #define M2_TIMERS ((volatile u32 *)0x00F00000u)
 
 /* STF's `random` state global (was i960 RAM @0x500098). */

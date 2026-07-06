@@ -51,6 +51,7 @@ static void m2_draw_glyph(float wx, float wy, float wz, float scale, u32 cb, u32
     volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;   /* GEO command FIFO */
     u32 ax = (c & 15u) * 8u, ay = ((c >> 4) & 7u) * 8u;  /* glyph rect in the 128x64 atlas */
     union { float f; u32 u; } sc; sc.f = scale;
+    if ((cb & 0x3ffu) == 0u) cb = 1u;   /* colorbase 0 = reserved "Palette 0" (Fig 4-4); clamp so text still shows */
     u32 hdr[4];
     u32 hslot = m2__next_slot(), uslot = hslot + 8u;   /* per-glyph header+UV slot (per-poly colour) */
     m2_font_atlas();

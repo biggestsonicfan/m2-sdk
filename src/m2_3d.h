@@ -154,7 +154,7 @@ static void m2_3d_colorxlat(void) {
  * geo 0x04 (texture-data) command IN THE DISPLAY LIST, then referenced with
  * tha = 0x00800000 (bit23 = texture_ram). See cube3d.c for the list layout. */
 static void m2_3d_solid(int colorbase, u16 bgr555) {
-    *(volatile u16 *)(0x01800000u + (colorbase + 0x1000) * 2) = bgr555;
+    *(volatile u16 *)(0x01800000u + (colorbase + 0x1000) * 2) = (u16)(bgr555 | M2_PAL_SET);
 }
 
 /* The COP command FIFO, COP_* opcodes, and the scalar/vector/matrix math moved to m2_math.h
