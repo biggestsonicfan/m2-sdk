@@ -249,29 +249,10 @@ M2_API void m2_textpal(int palbank, u16 colour) {
  * palbank*16+2). Call AFTER m2_textpal, which resets the outline to black. */
 M2_API void m2_textedge(int palbank, u16 colour) { m2_setpal(palbank * 16 + 2, colour); }
 
-/* ---- input (315-5649) ----------------------------------------------------- */
-enum { M2_UP = 1, M2_DOWN = 2, M2_LEFT = 4, M2_RIGHT = 8,
-       M2_B1 = 16, M2_B2 = 32, M2_B3 = 64, M2_START = 128 };
-
-/* Returns the pressed-button bitmask for player 0 (P1/IN1) or 1 (P2/IN2). */
-M2_API u32 m2_input(int player) {
-    u8 v;
-    u32 r = 0;
-    M2_IO.bank = 0;                 /* select digital bank 0 */
-    v = player ? M2_IO.in2 : M2_IO.in1;   /* active-low */
-    if (!(v & 0x20)) r |= M2_UP;
-    if (!(v & 0x10)) r |= M2_DOWN;
-    if (!(v & 0x80)) r |= M2_LEFT;
-    if (!(v & 0x40)) r |= M2_RIGHT;
-    if (!(v & 0x01)) r |= M2_B1;
-    if (!(v & 0x02)) r |= M2_B2;
-    if (!(v & 0x04)) r |= M2_B3;
-    return r;
-}
-M2_API u32 m2_start(void) {         /* IN0: bit4 = START1, bit5 = START2 */
-    M2_IO.bank = 0;
-    return (!(M2_IO.in0 & 0x10) ? 1u : 0u) | (!(M2_IO.in0 & 0x20) ? 2u : 0u);
-}
+/* ---- input (315-5649) -----------------------------------------------------
+ * The input decoders — the M2_UP.. bitmask enum, m2_input(), m2_start(), and the
+ * m2_player() struct snapshot — all live in m2_io.h now, next to the raw M2_IO
+ * registers and the M2_INP_ / M2_IN0_ masks they decode (included above). */
 
 /* Launcher control of the m2_vsync P1-Start exit hook (see M2_EXIT_CTL). */
 M2_API void m2_exit_arm(void (*handler)(void)) {

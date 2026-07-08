@@ -14,8 +14,17 @@
 
 #include "m2_constants.h"   /* M2_PALRAM / M2_COLORXLAT / M2_LUMARAM (the hardware map) */
 
+/* Luma source is GAME-DATA-SPECIFIC. STF stores a block count + byte ramp in its data
+ * ROM; another game's data ROM holds unrelated bytes there, so a kernel running on a
+ * DIFFERENT data ROM must NOT read these (an arbitrary count = a multi-billion-iteration
+ * copy = boot hang). A game profile (e.g. gs_gameprofile.h) overrides these before this
+ * header, or defines M2_LUMA_COMPUTED to generate the ramp instead of reading the ROM. */
+#ifndef M2_ROM_LUMA_BLOCKS
 #define M2_ROM_LUMA_BLOCKS 0x020d0008u   /* STF data ROM: luma block count        */
+#endif
+#ifndef M2_ROM_LUMA_SRC
 #define M2_ROM_LUMA_SRC    0x020d000cu   /* STF data ROM: luma byte ramp           */
+#endif
 
 /* colorxlat builder — FAITHFUL port of STF chg_pol_color_req (@0x32a8) + the
  * scatter half of chg_pol_color_send (@0x3454), folded into a direct plane fill.
@@ -102,12 +111,26 @@ static void m2__fill_scr_colorxlat(void) {
     }
 }
 
-/* essential_color_handling (STF @0x11dc8): luma_ram = data-ROM byte ramp -> u16. */
+/* luma_ram builder. Two shapes, selected by the game profile:
+ *
+ *  - M2_LUMA_COMPUTED: GENERATE the ramp (no data-ROM read). Faithful port of Power Sled's
+ *    sub_C8F0 — M2_LUMA_BLOCKS blocks of 0x80 u16 entries, entry k (0..0x7F) = (k+1)>>1
+ *    (0,1,1,2,2,..,64). Use for a data ROM that has no STF-style luma table. This is the
+ *    SAFE default when the data ROM is not STF's: it can never run away on a bad count.
+ *
+ *  - otherwise (STF): essential_color_handling (STF @0x11dc8) — luma_ram = data-ROM byte
+ *    ramp -> u16, length = (*M2_ROM_LUMA_BLOCKS) * 0x80. ONLY valid on STF's data ROM. */
 static void m2__build_lumaram(void) {
-    volatile u8  *src = (volatile u8 *)M2_ROM_LUMA_SRC;
     volatile u16 *dst = (volatile u16 *)M2_LUMARAM;
-    u32 n = (*(volatile u32 *)M2_ROM_LUMA_BLOCKS) * 0x80u, i;
+    u32 i;
+#ifdef M2_LUMA_COMPUTED
+    u32 n = (u32)(M2_LUMA_BLOCKS) * 0x80u;
+    for (i = 0; i < n; i++) dst[i] = (u16)(((i & 0x7Fu) + 1u) >> 1);
+#else
+    volatile u8 *src = (volatile u8 *)M2_ROM_LUMA_SRC;
+    u32 n = (*(volatile u32 *)M2_ROM_LUMA_BLOCKS) * 0x80u;
     for (i = 0; i < n; i++) dst[i] = (u16)src[i];
+#endif
 }
 
 /* Set up the 3D colour pipeline. Call once after m2_init(). */
@@ -131,12 +154,27 @@ static void m2_setcolor(u32 colorbase, u16 bgr555) {
  * palette from the data ROM into palram[0x1000..0x13ff]. Use this (instead of
  * per-slot m2_setcolor) when drawing STF model-table objects that reference the
  * game's own colorbase indices — e.g. textured models. Needs the STF data ROMs. */
+#ifndef M2_ROM_POLY_PALETTE
 #define M2_ROM_POLY_PALETTE 0x02100000u   /* STF data ROM: 1024 BGR555 colorbase colours */
+#endif
 static void m2_load_poly_palette(void) {
     volatile u16 *src = (volatile u16 *)M2_ROM_POLY_PALETTE;
     volatile u16 *dst = ((volatile u16 *)M2_PALRAM) + 0x1000u;
     u32 i;
     for (i = 0; i < 1024u; i++) dst[i] = src[i];
 }
+
+#ifdef GS_PSLED_PALETTE
+/* Power Sled's poly palette (sub_F100 @0xF100). Power Sled keeps its 522 colorbase colours in
+ * PROGRAM ROM (@0x128EE, count word @0x128EC), which our romset doesn't contain — so it's baked
+ * from the psled dump into psled_palette.h and loaded here into palram[0x1000..] (the colorbase
+ * window @0x1802000). The entries already carry the SET bit (0x8000). */
+#include "psled_palette.h"   /* const u16 psled_poly_palette[522] */
+static void m2_load_poly_palette_psled(void) {
+    volatile u16 *dst = ((volatile u16 *)M2_PALRAM) + 0x1000u;
+    u32 i, n = (u32)(sizeof(psled_poly_palette) / sizeof(psled_poly_palette[0]));
+    for (i = 0; i < n; i++) dst[i] = psled_poly_palette[i];
+}
+#endif
 
 #endif /* M2_COLOR_H */

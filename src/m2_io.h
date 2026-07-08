@@ -93,4 +93,40 @@ M2_API m2_player_t m2_player(int player) {
     return p;
 }
 
+/* ---- decoded bitmask (the other input ergonomics: OR of M2_* flags) -------- */
+
+/* Pressed-button flags. Pairs with m2_input()/m2_start(); a superset-friendly bitmask
+ * for `if (in & M2_LEFT)` style. NB M2_UP..M2_B3 map to the per-player in1/in2 bits and
+ * M2_START to the system in0 start bit (folded in by m2_input below). */
+enum { M2_UP = 1, M2_DOWN = 2, M2_LEFT = 4, M2_RIGHT = 8,
+       M2_B1 = 16, M2_B2 = 32, M2_B3 = 64, M2_START = 128 };
+
+/* Both players' start, from in0: bit0 = START1, bit1 = START2 (active-low -> 1 = held). */
+M2_API u32 m2_start(void) {
+    M2_IO.bank = 0;
+    return (!(M2_IO.in0 & M2_IN0_START1) ? 1u : 0u)
+         | (!(M2_IO.in0 & M2_IN0_START2) ? 2u : 0u);
+}
+
+/* Pressed-button bitmask for player 0 (P1/IN1) or 1 (P2/IN2). Includes M2_START for this
+ * player: START is a SYSTEM input on in0 (start1/start2), NOT in the per-player in1/in2
+ * byte — folding it in here makes the M2_START enum bit honest, so `m2_input()&M2_START`
+ * works as callers expect (before, that check was silently dead). m2_start() still reads
+ * both players' start at once; m2_player() is the same decode as a per-field struct. */
+M2_API u32 m2_input(int player) {
+    u8 v;
+    u32 r = 0;
+    M2_IO.bank = 0;                 /* normal-input mode */
+    v = player ? M2_IO.in2 : M2_IO.in1;   /* active-low */
+    if (!(v & M2_INP_UP))    r |= M2_UP;
+    if (!(v & M2_INP_DOWN))  r |= M2_DOWN;
+    if (!(v & M2_INP_LEFT))  r |= M2_LEFT;
+    if (!(v & M2_INP_RIGHT)) r |= M2_RIGHT;
+    if (!(v & M2_INP_B1))    r |= M2_B1;
+    if (!(v & M2_INP_B2))    r |= M2_B2;
+    if (!(v & M2_INP_B3))    r |= M2_B3;
+    if (m2_start() & (player ? 2u : 1u)) r |= M2_START;   /* in0 start1/start2 */
+    return r;
+}
+
 #endif /* M2_IO_H */

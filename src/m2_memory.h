@@ -42,9 +42,32 @@ typedef struct {
     u32 buff_add;              /* 0x1004  current display-list buffer address                           */
     u32 buff_max;              /* 0x1008  BUFF_MAX                                                       */
     u8  buff_index; u8 _q[3];  /* 0x100C  0..3 rotating display-list buffer index                        */
+    u8  _g2[0x84FC];           /* 0x1010..0x950B                                                         */
+    /* STF init_floats constants (RAMBASE 0x50950C..0x509514) — the boot writes these;
+     * TWO_PI is also read by ROM code (e.g. 0x89DA0). Single-precision, so PI is the
+     * truncated 3.1415925f, not the double-rounded value. */
+    float pi;                  /* 0x950C  PI       = 3.1415925f                                          */
+    float two_pi;              /* 0x9510  TWO_PI   = 6.2831855f                                          */
+    float sqrt_two;            /* 0x9514  SQRT_TWO = 1.4142135f                                          */
 } m2_mem_t;
 
 #define M2_MEM (*(volatile m2_mem_t *)0x00500000u)
+
+/* STF init_floats — the firmware routine that seeds pi/two_pi/sqrt_two never runs
+ * under the SDK (we replace the program ROMs), so call this once (e.g. after
+ * m2_init) before anything reads M2_MEM.pi/two_pi/sqrt_two. Values match the
+ * firmware's single-precision literals bit-for-bit. */
+/* Uploaded APPS include this header directly (gs_rt.h + m2_memory.h, no m2.h), so
+ * default M2_API here too — otherwise the first M2_API function added to this file
+ * breaks every app build (it did: m2_init_floats, Jul 2026). */
+#ifndef M2_API
+#define M2_API static
+#endif
+M2_API void m2_init_floats(void) {
+    M2_MEM.pi       = 3.1415925f;
+    M2_MEM.two_pi   = 6.2831855f;
+    M2_MEM.sqrt_two = 1.4142135f;
+}
 
 /* sanity: catch any struct padding that would slide a global off its STF address. */
 _Static_assert(__builtin_offsetof(m2_mem_t, vsync)      == 0x0000, "m2_mem_t.vsync");
@@ -58,5 +81,8 @@ _Static_assert(__builtin_offsetof(m2_mem_t, poly_bank)  == 0x1000, "m2_mem_t.pol
 _Static_assert(__builtin_offsetof(m2_mem_t, buff_add)   == 0x1004, "m2_mem_t.buff_add");
 _Static_assert(__builtin_offsetof(m2_mem_t, buff_max)   == 0x1008, "m2_mem_t.buff_max");
 _Static_assert(__builtin_offsetof(m2_mem_t, buff_index) == 0x100C, "m2_mem_t.buff_index");
+_Static_assert(__builtin_offsetof(m2_mem_t, pi)         == 0x950C, "m2_mem_t.pi");
+_Static_assert(__builtin_offsetof(m2_mem_t, two_pi)     == 0x9510, "m2_mem_t.two_pi");
+_Static_assert(__builtin_offsetof(m2_mem_t, sqrt_two)   == 0x9514, "m2_mem_t.sqrt_two");
 
 #endif /* M2_MEMORY_H */

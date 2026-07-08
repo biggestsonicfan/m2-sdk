@@ -237,6 +237,9 @@
  * running kernel (tools/pengo_model_probe.py). The sheet banks sit 0x200000 apart. The mip codec
  * (m2_tex_codec.h tex_mip_dests) ping-pongs the TEXRAM_0_1 / TEXRAM_1 pair; TEXRAM_0 is the extra
  * bank STF loads the COMMON character sheet into (unused by the stock codec path). */
+#define TEXRAM_BANK0  0x11000000u  /* 2 MB texram bank WINDOW (TEXRAM_0_1 sits at +0x100000);
+                                    * apps wipe the low 1 MB of each window for a clean slate     */
+#define TEXRAM_BANK1  0x11200000u  /* 2 MB texram bank WINDOW (TEXRAM_1 sits at +0x100000)        */
 #define TEXRAM_0      0x10F00000u  /* STF texram_0   (RAMBASE 0x500250) — common-sheet bank        */
 #define TEXRAM_0_1    0x11100000u  /* STF texram_0_1 (RAMBASE 0x500254) — mip ping-pong w/ TEXRAM_1 */
 #define TEXRAM_1      0x11300000u  /* STF texram_1   (RAMBASE 0x500258) — mip ping-pong w/ TEXRAM_0_1*/

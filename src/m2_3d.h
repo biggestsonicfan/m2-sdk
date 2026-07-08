@@ -17,8 +17,34 @@
 #define M2_3D_H
 
 #include "m2_constants.h" /* the hardware map: coprocessor regs, FIFO addrs, GEO slots/opcodes */
-#include "cpres1.h"    /* const unsigned short cpres_data[]  — bin2c'd cpres1 (COP) firmware */
-#include "cpres2.h"    /* const unsigned short cpres_data2[] — bin2c'd cpres2 (GEO) firmware */
+/* ---- per-profile coprocessor firmware — THE single source of truth ----------------------------
+ * cpres1 (COP) + cpres2 (GEO) SHARC microcode differ by game. Pull in ONLY the selected profile's
+ * two blobs — the other game's ~24k halfwords would be dead ROM weight — and name them in the SAME
+ * branch. EVERY copro upload (m2_cop_boot / m2_geo_boot below AND geoserial.c's inline COP boot)
+ * reads M2_COP_FW / M2_GEO_FW, so the choice lives in exactly one place. The halfword count is the
+ * array size and the boot-DMA count is words/3 (a 48-bit SHARC opcode = 3 firmware halfwords) —
+ * both DERIVED below, so there are no magic numbers to keep in sync with the blobs. */
+#ifdef GS_COP_PSLED
+/* Power Sled's OWN cpres1/cpres2. psled's cpres1 sin/cos is a self-contained minimax polynomial
+ * (coeffs baked in firmware — psled_cpres1_annotated.asm), needing NO copro-socket sine ROM. STF's
+ * cpres1 instead reads its sine LUT from copro_data @0x1C10000, which the psled board leaves empty
+ * (sin=0) — so on the psled board only PSLED's cpres1 gives working trig/rotation. */
+#include "psled_cpres1.h"                     /* const u16 cpres_data_psled[]  (COP) */
+#include "psled_cpres2.h"                     /* const u16 cpres_data2_psled[] (GEO) */
+#define M2_COP_FW  cpres_data_psled
+#define M2_GEO_FW  cpres_data2_psled
+#else
+/* Sonic the Fighters (default). cpres1's sin/cos LUT lives in the copro-socket ROM. */
+#include "cpres1.h"                           /* const u16 cpres_data[]  (COP) */
+#include "cpres2.h"                           /* const u16 cpres_data2[] (GEO) */
+#define M2_COP_FW  cpres_data
+#define M2_GEO_FW  cpres_data2
+#endif
+#define M2_COP_FW_N    ((int)(sizeof(M2_COP_FW) / sizeof((M2_COP_FW)[0])))
+#define M2_GEO_FW_N    ((int)(sizeof(M2_GEO_FW) / sizeof((M2_GEO_FW)[0])))
+#define M2_COP_DMACNT  (M2_COP_FW_N / 3)      /* 48-bit SHARC opcode = 3 firmware halfwords */
+#define M2_GEO_DMACNT  (M2_GEO_FW_N / 3)
+
 #include "m2_math.h"   /* COP command FIFO + COP_* opcodes + scalar/vector/matrix math (+ fastmath override) */
 
 /* Host-boot an ADSP-2106x copro: ctl reg, IOP base, FIFO, firmware + count, and
@@ -52,8 +78,9 @@ static void m2__copro_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
 
 /* cpres1 = COP / math (the SHARC MAME emulates; verified PC reaches 0x2013F). */
 static void m2_cop_boot(void) {
+    /* Firmware selected per profile by the M2_COP_* descriptors above (STF vs Power Sled). */
     m2__copro_upload(COP_CTL_REG, COP_IOP_BASE, M2_COPFIFO_ADDR,
-                     cpres_data, 14862, 0xA100, 0xA110, 0xC9400, 4954);
+                     M2_COP_FW, M2_COP_FW_N, 0xA100, 0xA110, 0xC9400, M2_COP_DMACNT);
 }
 
 /* GEO firmware upload — STF copro_down2 @0x1588, decoded from the i960 disasm. Same shape as
@@ -100,8 +127,9 @@ static void m2_geo_boot(void) {
      * so header[2] = 0x1, NOT 0. copro_down2 writes 0x840104 = 0x1. A previous misread set this to
      * 0 -> DMA stride 0 -> the GEO can't walk BUFF_RAM (GEO_RADDR pinned at 0, stripe field, no
      * render); peek/MAME(HLE) can't see it. The COP boot hardcodes 0x104=1 and works -> match it. */
+    /* Firmware selected per profile by the M2_GEO_* descriptors above (STF vs Power Sled). */
     m2__geo_upload(GEO_BOOT_CTL_REG, GEO_IOP_BASE, M2_GEOFIFO_ADDR,
-                   cpres_data2, 9351, 0x3100, 0x3110, 0xC400, 3117, /*hdr104=*/1u);
+                   M2_GEO_FW, M2_GEO_FW_N, 0x3100, 0x3110, 0xC400, M2_GEO_DMACNT, /*hdr104=*/1u);
 }
 
 /* Boot both coprocessors (COP then GEO, per STF start-up order). */
