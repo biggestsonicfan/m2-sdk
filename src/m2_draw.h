@@ -116,6 +116,32 @@ static void m2_direct_rect(float x, float y, float w, float h, u32 cb, float pz)
     *fifo = 0u; *fifo = 0u;
 }
 
+/* flat-colour DIRECT TRIANGLE from 3 ARBITRARY screen-pixel verts (sx,sy), colorbase cb, depth pz.
+ * Same TEXDATA-header + GEO_OP_DIRECT structure as m2_direct_rect, but the verts are arbitrary rather
+ * than a rect. Each vert maps screen px -> ((sx-248)*pz, (192-sy)*pz) exactly like the rect emitter.
+ * The GEO DIRECT strip unit is 4 verts (2 leading + header + 2 trailing); we submit a DEGENERATE quad
+ * v0,v1,v2,v2 (last vertex repeated) so it rasterises as the flat triangle v0-v1-v2. GEO_POLY_QUAD is
+ * DOUBLE-sided, so winding order is irrelevant. Used by the eye-strip driver. */
+static void m2_direct_tri(float x0, float y0, float x1, float y1, float x2, float y2, u32 cb, float pz) {
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
+    u32 tha = GEO_TEXRAM_BIT | (cb * 4u), zf = m2__fb(pz);
+    float ax = (x0 - 248.0f) * pz, ay = (192.0f - y0) * pz;
+    float bx = (x1 - 248.0f) * pz, by = (192.0f - y1) * pz;
+    float cx = (x2 - 248.0f) * pz, cy = (192.0f - y2) * pz;
+    /* render state is emitted ONCE per frame by m2_draw_frame_setup(); here just the header + tri */
+    *fifo = GEO_OP_TEXDATA; *fifo = tha; *fifo = 4u;
+    *fifo = 0u; *fifo = 0u; *fifo = 0u; *fifo = M2_TH3_COLORBASE(cb);
+    /* DIRECT: v0, v1, [polyHdr, luma, dist], v2, v2(dup) -> degenerate quad = triangle */
+    *fifo = GEO_OP_DIRECT;
+    *fifo = 0u; *fifo = tha;
+    *fifo = m2__fb(ax); *fifo = m2__fb(ay); *fifo = zf;
+    *fifo = m2__fb(bx); *fifo = m2__fb(by); *fifo = zf;
+    *fifo = GEO_POLY_QUAD; *fifo = (m2_draw_luma << 23); *fifo = 0u;
+    *fifo = m2__fb(cx); *fifo = m2__fb(cy); *fifo = zf;
+    *fifo = m2__fb(cx); *fifo = m2__fb(cy); *fifo = zf;
+    *fifo = 0u; *fifo = 0u;
+}
+
 /* textured+translucent DIRECT quad over screen rect (x,y,w,h): sample the th2 tile (texx,texy) and map
  * the UV sub-rect (u0,v0)+(uw,vh) texels across the quad, colorbase cb, depth pz. th0 carries
  * textured+translucent + the tile dims. UV sub-rect lets glyphs (8x8 at sub-tile offsets) index a tile

@@ -106,31 +106,56 @@ M2_API void xt_link_init(void) {
 static int xt_pb = -1;                       /* one-byte pushback (peek support) */
 M2_API void xtransport_unget(int b) { xt_pb = b; }
 
+/* Runtime host environment for the RX idle path (see xtransport_trygetc):
+ *   -1 = unknown (self-calibrate on the first idle poll)
+ *    0 = SILICON   — pure FLAG-poll, NEVER strobe
+ *    1 = MAME      — strobe TXD1 each idle poll to pop the host-injection FIFO
+ * Historically this was inferred every poll from FLAG bit6 (0x40 = line-idle), but that
+ * gate REGRESSED: the deployment board now idles bit6 CLEAR (FLAG0=0x00) just like MAME,
+ * so bit6 can no longer tell them apart. Detect the environment ONCE, at the wire, via a
+ * behaviour only MAME exhibits (see xt_env_probe below), then latch it here. */
+static int xt_env = -1;
+
+/* Seed the environment from a controlled boot-time probe (e.g. serial_selftest's strobe
+ * test), so the serve loop never has to speculatively strobe on silicon. mame != 0 => MAME. */
+M2_API void xtransport_set_env(int mame) { xt_env = mame ? 1 : 0; }
+
 M2_API int xtransport_trygetc(void) {
     u8 f;
     if (xt_pb >= 0) { int b = xt_pb; xt_pb = -1; return b; }
 
     f = M2_IO.flag;
 
-    /* The real 315-5649 idles with FLAG bit6 (0x40) SET; MAME never sets it (its FLAG is
-     * only 0x00..0x0C). So bit6 cleanly selects SILICON vs MAME. On SILICON do PURE
-     * flag-polled RX with NO strobe (the idle strobe both floods the link and disturbs
-     * the single-channel RX). Read on ANY RXBF bit: a single byte lands in RXD1 (RX1BF,
-     * FLAG=0x44), a rapid multi-byte frame sets BOTH (0x0C). RX1BF has priority. */
-    if (f & 0x40u) {                              /* real silicon */
-        if (f & 0x04u) return (int)M2_IO.rxd1;       /* RX1BF (alone or with RX2BF) */
-        if (f & 0x08u) return (int)M2_IO.rxd2;       /* RX2BF only */
-        return -1;                                /* no byte; pure poll, no strobe */
-    }
+    /* A received byte is present whenever an RXBF bit is set (bit2=RX1BF, bit3=RX2BF) — read it
+     * REGARDLESS of bit6. On silicon a paced host byte lands here directly (FLAG=0x04, RXD1=byte,
+     * bit6 CLEAR — proven 2026-07-11 with the GS_RXPROBE build); on MAME a strobed byte lands here
+     * as RX1BF|RX2BF. Either way this is the fast, non-intrusive path and it is tried first. */
+    if (f & 0x04u) return (int)M2_IO.rxd1;       /* RX1BF -> data in RXD1 */
+    if (f & 0x08u) return (int)M2_IO.rxd2;       /* RX2BF -> data in RXD2 */
 
-    /* MAME (bit6 clear): strobe to pop the host-injection FIFO — delivered synchronously
-     * (BOTH RXBF set + status 0x01 in RXD1 / data in RXD2). No spin. */
-    M2_IO.txd2 = 0; M2_IO.txd1 = XT_CMD_IDLE;
-    if ((M2_IO.flag & XT_RXBF_BOTH) == XT_RXBF_BOTH) {
-        u8 st = M2_IO.rxd1, dt = M2_IO.rxd2;
-        if (st & XT_RX_VALID) return (int)dt;
+    /* No byte by pure poll. The idle behaviour now DIFFERS by host and must not be guessed from
+     * bit6 (regressed to 0 on the deployment board):
+     *   - SILICON: the 315-5649 deserialises inbound bytes straight into RXD1/RXD2, so no strobe is
+     *     needed; worse, an idle strobe (txd1=XT_CMD_IDLE) fires every poll and floods board->host
+     *     with 00 82 pairs (~192 KB/s), burying the gs_reply frames — the exact bug that made the
+     *     host see PING go unanswered even though the board went CONNECTED.
+     *   - MAME (315_5649.cpp): a host byte sits in the host-injection FIFO and only pops when the
+     *     board STROBES TXD1; FLAG stays 0x00 until then. The strobe unconditionally enqueues a
+     *     status+data pair, so FLAG comes back 0x0C (RX1BF|RX2BF) — which is also how we detect it.
+     * xt_env latches which world we're in: silicon (0) => never strobe; MAME (1) => strobe. When
+     * still unknown (-1) — no boot seed via xtransport_set_env — self-calibrate with ONE strobe
+     * (harmless on silicon: it is exactly serial_selftest's proven-safe probe). */
+    if (xt_env != 0) {                            /* MAME, or unknown -> probe once */
+        M2_IO.txd2 = 0; M2_IO.txd1 = XT_CMD_IDLE; /* strobe to pop the MAME host FIFO / probe silicon */
+        if ((M2_IO.flag & XT_RXBF_BOTH) == XT_RXBF_BOTH) {
+            u8 st = M2_IO.rxd1, dt = M2_IO.rxd2;  /* drain BOTH channels (status + data) */
+            xt_env = 1;                           /* strobe produced a reply => MAME */
+            if (st & XT_RX_VALID) return (int)dt;
+            return -1;
+        }
+        if (xt_env < 0) xt_env = 0;               /* strobe drew nothing => SILICON: stop strobing */
     }
-    return -1;
+    return -1;                                     /* silicon idle, or MAME strobe with no data */
 }
 
 /* Send one byte (carried in TXD2 with the DATA command, lockstep). Returns 1. */

@@ -1034,9 +1034,9 @@ static const unsigned char gFont[] =
  * previously copy-pasted as g2d_texel / m2__font_texel / m2__obj_texel and
  * g2d_font_atlas / m2_font_atlas; collapsed here so every path shares one impl. */
 
-/* set one 4-bit texel (val) at (x,y) in texram0 sheet 0 */
-static void m2_texram0_texel(int x, int y, u8 val) {
-    volatile u32 *T0 = (volatile u32 *)0x11000000u;
+/* set one 4-bit texel (val) at (x,y) in a texram BANK window's sheet 0 (same 2x2 swizzle) */
+static void m2_texram_texel_at(u32 bank, int x, int y, u8 val) {
+    volatile u32 *T0 = (volatile u32 *)bank;
     u32 offset = (u32)((y / 2) * 512 + (x / 2));
     u32 widx   = offset >> 1;
     int shift  = ((x & 1) ? 0 : 4) + ((y & 1) ? 0 : 8) + ((offset & 1) ? 16 : 0);
@@ -1044,28 +1044,81 @@ static void m2_texram0_texel(int x, int y, u8 val) {
     T0[widx] = (w & ~(0xFu << shift)) | ((u32)(val & 0xf) << shift);
 }
 
+/* set one 4-bit texel (val) at (x,y) in texram0 sheet 0 */
+static void m2_texram0_texel(int x, int y, u8 val) { m2_texram_texel_at(0x11000000u, x, y, val); }
+
 static int m2__font_loaded = 0;
 
-/* Upload gFont -> texram0 as a 128x64 atlas (16x8 glyph grid). Stroke nibble (1) ->
+/* Decode one atlas texel straight from gFont: glyph c's pixel, screen-order (x,y in 0..7).
+ * gFont packs each row's columns as two 4-px halves, right-half first AND each half reversed
+ * vs screen order; undo with a half-swap + flip: src col gx satisfies x = 7 - ((gx+4)&7),
+ * i.e. gx = (3 - x) & 7 (verified against tools/fontdump.py swapx+flipx). */
+static u8 m2__font_texel(int c, int x, int y) {
+    const u8 *g = gFont + (u32)c * 32;
+    int gx = (3 - x) & 7;
+    u8 v = g[y * 4 + (gx >> 1)];
+    int ink = (gx & 1) ? (v >> 4) : (v & 0x0f);
+    return (u8)(ink == 1 ? 14 : 0x0f);
+}
+
+#ifdef M2_TEX_CODEC_H
+/* Fill the codec's shade buffer with the whole 128x64 atlas (row-major, 128 wide): the mip
+ * builder packs SHADE nibbles, and for the hand-stamped atlas the shade IS the texel
+ * (ink 0xE / transparent 0xF). Refill before EACH tex_build_mips call — the builder
+ * ping-pongs g_tex_shade/g_tex_shade2 and destroys the level-0 contents. */
+static void m2__font_fill_shade(void) {
+    int c, gy, gx;
+    for (c = 0; c < 128; c++) {
+        int ax = (c & 15) * 8, ay = (c >> 4) * 8;
+        for (gy = 0; gy < 8; gy++)
+            for (gx = 0; gx < 8; gx++)
+                g_tex_shade[(ay + gy) * 128 + (ax + gx)] = m2__font_texel(c, gx, gy);
+    }
+}
+#endif
+
+/* Upload gFont -> texram as a 128x64 atlas (16x8 glyph grid). Stroke nibble (1) ->
  * texel 14 (ink); everything else (fill/shadow nibble 2, or empty) -> 0xf (transparent
  * in the translucent renderer). Idempotent. Call ONCE after the colour pipeline is up.
- *   gFont packs each row's columns as two 4-px halves, right-half first AND each half
- *   reversed vs screen order; undo with a half-swap + flip: dst col = 7 - ((gx+4)&7).
- *   Verified against the source in tools/fontdump.py (swapx+flipx). */
+ *
+ * SILICON (2026-07-12 glyph regression, memory/silicon-text-findings): LOD0 alone is NOT
+ * enough on the current burn — every size renders a solid block, i.e. the GEO samples MIP
+ * levels the hand-stamp never wrote (and/or the other bank: texture-header doc bit12
+ * "Even Bank: 0 designates ODD bank" vs our th word2=0). So:
+ *   1. stamp LOD0 into BOTH 2MB bank windows (0x11000000 + the 0x11200000 mirror), and
+ *   2. when the tex codec is present (the kernel build: m2_tex_codec.h precedes m2_text.h),
+ *      author the MIP pyramid for the atlas with the PROVEN cube-texture machinery
+ *      (tex_mip_dests_banks + tex_build_mips), down BOTH bank-pair orders so whichever
+ *      chain the GEO walks holds real glyph data. Mip texels pack 2x2 shade nibbles; ink
+ *      0xE / transparent 0xF average ink-biased, so small mips read slightly bold.
+ * ⚠ the 0x11200000 mirror + mip regions overlap texture-PAGE loads (gs_load_tex_page lands
+ * tiles by parity): apps mixing STF texture pages AND text should load pages FIRST — the
+ * atlas stamp is once-guarded and later page loads would clobber it anyway. */
 static void m2_font_atlas(void) {
     int c, gy, gx;
     if (m2__font_loaded) return;
     for (c = 0; c < 128; c++) {
-        const u8 *g = gFont + (u32)c * 32;
         int ax = (c & 15) * 8, ay = (c >> 4) * 8;
         for (gy = 0; gy < 8; gy++)
             for (gx = 0; gx < 8; gx++) {
-                u8 v = g[gy * 4 + (gx >> 1)];
-                int ink = (gx & 1) ? (v >> 4) : (v & 0x0f);
-                m2_texram0_texel(ax + (7 - ((gx + 4) & 7)), ay + gy,
-                                 (u8)(ink == 1 ? 14 : 0x0f));
+                u8 t = m2__font_texel(c, gx, gy);
+                m2_texram_texel_at(0x11000000u, ax + gx, ay + gy, t);
+                m2_texram_texel_at(0x11200000u, ax + gx, ay + gy, t);   /* odd-bank insurance */
             }
     }
+#ifdef M2_TEX_CODEC_H
+    {   /* author the atlas mip pyramid, both bank-pair orders (atlas tile = texx 0, texy 0) */
+        u32 mip[10];
+        g_tex_w = 128u; g_tex_h = 64u;
+        m2__font_fill_shade();
+        tex_mip_dests_banks(0u, 0u, 0x11000000u, 0x11200000u, mip);
+        tex_build_mips(mip);
+        g_tex_w = 128u; g_tex_h = 64u;
+        m2__font_fill_shade();
+        tex_mip_dests_banks(0u, 0u, 0x11200000u, 0x11000000u, mip);
+        tex_build_mips(mip);
+    }
+#endif
     m2__font_loaded = 1;
 }
 
