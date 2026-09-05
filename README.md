@@ -180,7 +180,8 @@ CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
   `src/psled_palette.h`) are Sega-copyrighted and are **git-ignored, not distributed**;
   extract them from your own dumps per
   [`docs/firmware-extraction.md`](docs/firmware-extraction.md), with
-  [stf-tools](https://github.com/biggestsonicfan/stf-tools) once its extractor lands.
+  [stf-tools](https://github.com/biggestsonicfan/stf-tools)'s `extract-rom.mjs` as the
+  extractor for the two Sonic the Fighters blobs.
   Built ROM images (`roms/`) are git-ignored too.
 - **How this was built:** written with AI assistance (Claude, via Claude Code) throughout.
   See [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) for what the AI did and did not contribute,

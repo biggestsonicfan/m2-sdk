@@ -33,16 +33,47 @@ already carry the `0x8000` SET bit.
 
 ## How to extract
 
-A dedicated extractor is planned for **[stf-tools](https://github.com/biggestsonicfan/stf-tools)**.
-Once it exists, use it — it will know the per-game offsets and emit these headers directly.
-Until then, `tools/bin2c.py` converts a raw binary you have carved out yourself:
+### Sonic the Fighters (`cpres1.h` / `cpres2.h`) — use stf-tools
+
+**[stf-tools](https://github.com/biggestsonicfan/stf-tools)** has the extractor:
+`extract-rom.mjs` joins your ROM set's two 16-bit EPROMs back into the board's regions,
+checks every member against its CRC-32, and refuses to write from a set that does not
+match. It knows where both coprocessor executables sit in the program ROM.
 
 ```sh
-# bin2c.py <input.bin> <output.h> <array_name> [u32|u16|u8]
-python tools/bin2c.py cpres1.bin src/cpres1.h cpres_data u16
-python tools/bin2c.py cpres2.bin src/cpres2.h cpres_data2 u16
+git clone --recursive https://github.com/biggestsonicfan/stf-tools.git
+cd stf-tools                       # put your own sfight.zip here
+node extract-rom.mjs --list        # prints both blobs: 0xb6318 +0x741c, 0xbd748 +0x490e
+node extract-rom.mjs --region rom_code1.bin --out /tmp/stf-rom
+```
 
-# Power Sled profiles only:
+`--cpres` writes the same two blobs directly, but as i960 `.S` `.byte` arrays for the
+decompilation to link, not as the C headers this SDK includes. So carve the program ROM
+and run it through `tools/bin2c.py` instead — the offsets are the ones `--list` prints:
+
+```sh
+cd <m2-sdk>
+python - <<'EOF'
+d = open('/tmp/stf-rom/rom_code1.bin', 'rb').read()
+open('cpres1.bin', 'wb').write(d[0xb6318:0xb6318 + 0x741c])
+open('cpres2.bin', 'wb').write(d[0xbd748:0xbd748 + 0x490e])
+EOF
+# bin2c.py <input.bin> <output.h> <array_name> [u32|u16|u8]
+python tools/bin2c.py cpres1.bin src/cpres1.h cpres_data  u16
+python tools/bin2c.py cpres2.bin src/cpres2.h cpres_data2 u16
+```
+
+That is verified, not assumed: run against a CRC-clean `sfight.zip` it reproduces the
+headers this SDK was developed with byte for byte — 29724 bytes / 14862 halfwords for
+`cpres_data`, 18702 / 9351 for `cpres_data2` — with only the generated-from comment line
+differing.
+
+### Power Sled (`psled_*.h`) — still by hand
+
+stf-tools only knows the Sonic the Fighters romset, so the three Power Sled headers have
+no extractor. Carve them from your own Power Sled dump and convert the same way:
+
+```sh
 python tools/bin2c.py psled_cpres1.bin  src/psled_cpres1.h  cpres_data_psled     u16
 python tools/bin2c.py psled_cpres2.bin  src/psled_cpres2.h  cpres_data2_psled    u16
 python tools/bin2c.py psled_palette.bin src/psled_palette.h psled_poly_palette   u16
