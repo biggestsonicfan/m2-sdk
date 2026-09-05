@@ -5,3 +5,10 @@ temp/
 *.elf
 *.bin
 game.map
+
+# ROM-derived data — extract your own, never commit (see docs/firmware-extraction.md)
+src/cpres1.h
+src/cpres2.h
+src/psled_cpres1.h
+src/psled_cpres2.h
+src/psled_palette.h

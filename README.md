@@ -5,7 +5,17 @@ board (Intel **i960KB** main CPU), built into the program ROM pair
 `roms/epr-19001.15` + `roms/epr-19002.16`. It runs in MAME on the `sfight`
 (Sonic the Fighters) romset by overriding just those two program EPROMs.
 
+> **AI disclosure:** essentially all source in this repo was written by Claude (Anthropic)
+> under human direction; the hardware facts behind it came from ROM disassembly, MAME
+> source and real-board measurement, not from the AI. Read
+> [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) before trusting a "verified on silicon" comment.
+
 ## Quick start
+
+**First, one prerequisite:** the SDK ships **no Sega ROM data**. Before a coprocessor
+build will compile you must extract `src/cpres1.h` + `src/cpres2.h` from your own ROM
+dump — see [`docs/firmware-extraction.md`](docs/firmware-extraction.md). Those headers
+are git-ignored; the build stops with a pointer to that doc if they are missing.
 
 ```sh
 # msys2 clang64 i960-elf toolchain + cmake/ninja must be on PATH (see "Toolchain")
@@ -153,12 +163,32 @@ i.e. `C:\msys64\clang64\bin`. That directory **must be on `PATH`** — otherwise
 
 ```
 src/      SDK headers (m2*.h) + i960 boot/IRQ asm (*.s) + your game .c
+          (+ your extracted cpres*.h firmware blobs — git-ignored)
 lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum)
 tools/    stfbin2rom.py (split the ROM image), bin2c.py
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```
 
-## Credits
+## Credits and provenance
 
 - 8×8 bitmap font (`src/m2font.h`): Steve J's Daytona USA Test ROM project —
   https://github.com/stevej0/DaytonaTestRom
+- i960 reset/startup asm (`src/kx_init.s`, `src/kx_ftbl.s`): Intel Corporation, 1989 —
+  redistributed under the permission notice at the top of those files.
+- **No Sega ROM data ships with this SDK.** The coprocessor firmware and palette blobs
+  (`src/cpres1.h`, `src/cpres2.h`, `src/psled_cpres1.h`, `src/psled_cpres2.h`,
+  `src/psled_palette.h`) are Sega-copyrighted and are **git-ignored, not distributed**;
+  extract them from your own dumps per
+  [`docs/firmware-extraction.md`](docs/firmware-extraction.md), with
+  [stf-tools](https://github.com/biggestsonicfan/stf-tools) once its extractor lands.
+  Built ROM images (`roms/`) are git-ignored too.
+- **How this was built:** written with AI assistance (Claude, via Claude Code) throughout.
+  See [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) for what the AI did and did not contribute,
+  and how much to trust the comments.
+
+## Status
+
+Experimental homebrew reverse-engineering work, not a validated product. There is no test
+suite; "correct" here means someone watched it run in MAME, on m2emulator, or on a real
+Model 2B. Comments may be stale or over-confident — corrections of the form "this comment
+claims X, the board actually does Y" are the most valuable contribution you can make.

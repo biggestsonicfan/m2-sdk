@@ -169,7 +169,11 @@ static void m2_load_poly_palette(void) {
  * PROGRAM ROM (@0x128EE, count word @0x128EC), which our romset doesn't contain — so it's baked
  * from the psled dump into psled_palette.h and loaded here into palram[0x1000..] (the colorbase
  * window @0x1802000). The entries already carry the SET bit (0x8000). */
+#if !defined(__has_include) || __has_include("psled_palette.h")
 #include "psled_palette.h"   /* const u16 psled_poly_palette[522] */
+#else
+#error "Missing psled_palette.h. Power Sled's poly palette is extracted from your own ROM dump and NOT redistributed with this SDK. See docs/firmware-extraction.md."
+#endif
 static void m2_load_poly_palette_psled(void) {
     volatile u16 *dst = ((volatile u16 *)M2_PALRAM) + 0x1000u;
     u32 i, n = (u32)(sizeof(psled_poly_palette) / sizeof(psled_poly_palette[0]));

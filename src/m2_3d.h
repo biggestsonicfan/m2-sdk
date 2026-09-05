@@ -29,14 +29,22 @@
  * (coeffs baked in firmware — psled_cpres1_annotated.asm), needing NO copro-socket sine ROM. STF's
  * cpres1 instead reads its sine LUT from copro_data @0x1C10000, which the psled board leaves empty
  * (sin=0) — so on the psled board only PSLED's cpres1 gives working trig/rotation. */
+#if !defined(__has_include) || __has_include("psled_cpres1.h")
 #include "psled_cpres1.h"                     /* const u16 cpres_data_psled[]  (COP) */
 #include "psled_cpres2.h"                     /* const u16 cpres_data2_psled[] (GEO) */
+#else
+#error "Missing psled_cpres1.h / psled_cpres2.h. These are Power Sled coprocessor firmware, extracted from your own ROM dump and NOT redistributed with this SDK. See docs/firmware-extraction.md."
+#endif
 #define M2_COP_FW  cpres_data_psled
 #define M2_GEO_FW  cpres_data2_psled
 #else
 /* Sonic the Fighters (default). cpres1's sin/cos LUT lives in the copro-socket ROM. */
+#if !defined(__has_include) || __has_include("cpres1.h")
 #include "cpres1.h"                           /* const u16 cpres_data[]  (COP) */
 #include "cpres2.h"                           /* const u16 cpres_data2[] (GEO) */
+#else
+#error "Missing cpres1.h / cpres2.h. These are Sonic the Fighters coprocessor firmware, extracted from your own ROM dump and NOT redistributed with this SDK. See docs/firmware-extraction.md."
+#endif
 #define M2_COP_FW  cpres_data
 #define M2_GEO_FW  cpres_data2
 #endif
