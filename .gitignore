@@ -12,3 +12,4 @@ src/cpres2.h
 src/psled_cpres1.h
 src/psled_cpres2.h
 src/psled_palette.h
+src/pacman_roms.h

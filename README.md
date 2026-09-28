@@ -129,6 +129,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport (uses `M2_IO`). |
 | `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
+| `m2_z80.h` | A Z80 interpreter (passes zexdoc) for emulating Z80 boards on the i960; bus hooks are macros you define. Portable C — also builds on the host. Used by `src/pacman.c`. |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
 `i_table.s`, `i_handle.s` (assembled automatically by the build).
@@ -150,6 +151,42 @@ Both g2d paths render on MAME's HLE'd GEO and need **no coprocessor/firmware** �
 but neither survives `M2_HLE_GEO_OFF` (the real geometrizer). For silicon, use the
 object_data path (`m2_geo.h` `geo_obj_*`) or `m2_text.h`/`m2_draw.h`.
 
+## Emulating another board: Pac-Man (`src/pacman.c`)
+
+MAME's `pacman` driver, ported to the i960: the Z80 is interpreted by `m2_z80.h`, and
+`src/pacman_hw.h` is the rest of the board (memory map, IM 2 vblank IRQ, inputs, the
+tilemap + 8 sprites, both PROMs). The 224x288 portrait screen sits cell-aligned on the
+System 24 tile plane (`m2_tilefb.h`), and each frame only the changed cells are copied
+to char RAM. It has no sound (Namco WSG) and no cocktail flip.
+
+```sh
+python3 tools/pacrom.py path/to/pacman.zip   # -> src/pacman_roms.h (Namco data: git-ignored)
+cmake -G Ninja -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_GAME=pacman
+ninja -C build
+```
+
+Without `src/pacman_roms.h` it builds a homebrew board test instead (`src/pactest_rom.h`,
+made by `tools/pactest.py`, all original data). The test has text, colours, a frame
+counter, the raw IN0/IN1 bytes, a Pac-Man you steer with the P1 stick, and three ghosts.
+Inputs: P1/P2 sticks, COIN1/2, START1/2, SERVICE = credit.
+
+- **Speed:** in MAME, the Z80 alone can do ~104% of real time on the 25 MHz i960 (test
+  ROM with the Z80 never idle). With drawing it's ~90%, so after a frame that overruns its
+  vblank, the next one skips drawing (never two in a row), which holds ~99%. The panel on
+  the left shows the rate; `-DPAC_BENCH` removes the vblank cap to show the headroom.
+  One Pac-Man frame runs per Model 2 vblank, so game time follows the Model 2 refresh,
+  not Pac-Man's 60.6 Hz. Not tried on silicon.
+- **Tests:** `tools/z80test/z80test.c` runs zexdoc (67/67 pass) against the core on the
+  host, and `tools/pachost.c` runs the whole board on the host and writes a PPM.
+- **Run on a stock sfight romset:** every build also writes `roms/<game>/game.bin`, and
+  `tools/m2_load.lua` (an `-autoboot_script`) copies it over the program ROM region and
+  resets. That's how Pinboard's web MAME launches it.
+- **Why interpret?** The Model 2 has an i960, and its sound board a 68000 and the SCSP, so
+  in principle a guest board built on those chips could hand its code to the matching
+  part instead of interpreting it (not built yet). Pac-Man's Z80 has no match here, so
+  it goes through the interpreter; the machine layer (`pacman_hw.h`) only sees the bus
+  hooks, not how the CPU runs.
+
 ## Toolchain
 
 Build with the **msys2 CLANG64** `i960-elf` GNU toolchain (GCC 11 + binutils),
@@ -165,7 +202,8 @@ i.e. `C:\msys64\clang64\bin`. That directory **must be on `PATH`** — otherwise
 src/      SDK headers (m2*.h) + i960 boot/IRQ asm (*.s) + your game .c
           (+ your extracted cpres*.h firmware blobs — git-ignored)
 lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum)
-tools/    stfbin2rom.py (split the ROM image), bin2c.py
+tools/    stfbin2rom.py (split the ROM image), bin2c.py, m2_load.lua (boot game.bin in MAME),
+          pacrom.py / pactest.py / pachost.c / z80test/ (Pac-Man port)
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```
 
@@ -182,7 +220,8 @@ CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
   [`docs/firmware-extraction.md`](docs/firmware-extraction.md), with
   [stf-tools](https://github.com/biggestsonicfan/stf-tools)'s `extract-rom.mjs` as the
   extractor for the two Sonic the Fighters blobs.
-  Built ROM images (`roms/`) are git-ignored too.
+  Built ROM images (`roms/`) and a packed Pac-Man romset (`src/pacman_roms.h`) are
+  git-ignored too.
 - **How this was built:** written with AI assistance (Claude, via Claude Code) throughout.
   See [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) for what the AI did and did not contribute,
   and how much to trust the comments.

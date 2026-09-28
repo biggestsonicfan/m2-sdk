@@ -68,8 +68,12 @@ add_custom_target(rom ALL
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/stfbin2rom.py"
             --input game.bin --output "${CMAKE_SOURCE_DIR}/roms"
+    # the flat image too, per game (not clobbered by other builds): tools/m2_load.lua
+    # boots it on a stock sfight romset, e.g. in Pinboard's web MAME
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}"
+    COMMAND ${CMAKE_COMMAND} -E copy game.bin "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}/game.bin"
     COMMAND ${CMAKE_COMMAND} -E echo
-            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16"
+            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16  roms/${M2_GAME}/game.bin"
     DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)
