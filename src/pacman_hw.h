@@ -102,6 +102,11 @@ static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
 #define Z80_IN(p)     ((void)(p), 0xff)
 #define Z80_OUT(p, v) ((void)(p), pac_vector = (v)) /* any port: the IM 2 vector latch */
 #define Z80_FETCH(a)  (((a) & 0x7fff) < 0x4000 ? pac_rom[(a) & 0x3fff] : pac_rd(a))
+/* idle skip: the game's main loop spins on its task queue (`ld hl,(nn); ld a,(hl);
+ * and a; jp m,loop`, 0x238D in pacman/puckman) until the vblank IRQ queues work; once
+ * it loops, nothing changes before that IRQ, so end the Z80's slice right there. */
+static int pac_idle_pc = -1;           /* found by pac_find_idle(); -1 = none */
+#define Z80_JP_TAKEN(t) do { if ((int)(t) == pac_idle_pc) z80.cycles = 0; } while (0)
 #include "m2_z80.h"
 
 /* ---- decode ---------------------------------------------------------------- */
@@ -161,8 +166,21 @@ static void pac_palette_rgb(int i, u8 *r, u8 *g, u8 *b) {
     *b = (u8)(((v >> 6) & 1) * 0x51 + ((v >> 7) & 1) * 0xae);
 }
 
+/* find the idle loop by its bytes, so any set built on this code gets the skip */
+static void pac_find_idle(void) {
+    int i;
+    pac_idle_pc = -1;
+    for (i = 0; i + 8 <= 0x4000; i++)
+        if (pac_rom[i] == 0x2a && pac_rom[i + 3] == 0x7e && pac_rom[i + 4] == 0xa7
+            && pac_rom[i + 5] == 0xfa && (pac_rom[i + 6] | (pac_rom[i + 7] << 8)) == i) {
+            pac_idle_pc = i;
+            return;
+        }
+}
+
 static void pac_reset(void) {
     pac_video_init();
+    pac_find_idle();
     pac_irq_mask = 0; pac_vector = 0;
     pac_spr_ncells[0] = pac_spr_ncells[1] = 0;
     z80_reset();
@@ -240,7 +258,10 @@ static void pac_render(void) {
 /* One video frame: the Z80 runs a frame's worth of cycles, then vblank raises the IRQ
  * (if enabled) and the screen is rendered — unless `render` is 0 (frameskip: changes keep
  * collecting in the dirty lists and show up on the next rendered frame). */
+static u32 pac_frames;                 /* emulated frames so far */
+
 static void pac_frame(int render) {
+    pac_frames++;
     z80_run(PAC_CYCLES_PER_FRAME);
     if (pac_irq_mask) { z80.irq_line = 1; z80.irq_vec = pac_vector; }
 #ifndef PAC_NORENDER

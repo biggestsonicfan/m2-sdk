@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""pacrom.py <pacman.zip | romdir> [-o src/pacman_roms.h]
+"""pacrom.py <pacman.zip | puckman.zip | romdir> [-o header]
 
-Packs a MAME Pac-Man romset into src/pacman_roms.h for src/pacman.c. That header is
-Namco ROM data: it is gitignored, never commit it. Accepts the `pacman` (Midway) or
-`puckman` (Namco) set, as a zip or a directory of loose files.
+Packs a MAME Pac-Man romset for src/pacman.c: the `pacman` (Midway) set goes to
+src/pacman_roms.h, the `puckman` (Namco) set to src/puckman_roms.h (src/puckman.c).
+Zip or a directory of loose files. The headers are Namco ROM data: gitignored, never
+commit them.
 """
 import argparse, os, sys, zipfile
 
@@ -38,7 +39,7 @@ def write_header(path, regions, source, note):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('src')
-    ap.add_argument('-o', '--output', default=os.path.join(os.path.dirname(__file__), '..', 'src', 'pacman_roms.h'))
+    ap.add_argument('-o', '--output', help='default: src/<set>_roms.h')
     a = ap.parse_args()
     if os.path.isdir(a.src):
         files = {n.lower(): open(os.path.join(a.src, n), 'rb').read() for n in os.listdir(a.src)}
@@ -48,9 +49,11 @@ def main():
     for name, rs in SETS.items():
         if all(f in files for fl in rs.values() for f in fl):
             regions = {k: b''.join(files[f] for f in fl) for k, fl in rs.items()}
-            write_header(a.output, regions, '%s (%s set)' % (os.path.basename(a.src), name),
+            out = a.output or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', name + '_roms.h')
+            os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+            write_header(out, regions, '%s (%s set)' % (os.path.basename(a.src), name),
                          'Namco ROM data - do not commit.')
-            print('%s: %s set' % (a.output, name))
+            print('%s: %s set' % (os.path.normpath(out), name))
             return
     sys.exit('no complete pacman/puckman set in %s (have: %s)' % (a.src, ', '.join(sorted(files))))
 

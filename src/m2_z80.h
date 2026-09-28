@@ -13,6 +13,7 @@
  *     #define Z80_OUT(p, v) pac_out(p, v)
  * Optional: Z80_FETCH(a) for opcode/operand fetches (defaults to Z80_RD) — point it at the
  * ROM array when code only ever runs from ROM, which skips the bus decode.
+ * Optional: Z80_JP_TAKEN(target), an idle-loop hook (see below).
  * The hooks must not touch `z80`: z80_run works on a local copy and writes it back at the
  * end. Between z80_run calls the board may set z80.irq_line / z80.irq_vec.
  *
@@ -29,6 +30,12 @@
 
 #ifndef Z80_FETCH
 #define Z80_FETCH(a) Z80_RD(a)
+#endif
+/* Z80_JP_TAKEN(target): run after a taken JP cc. A board can use it to end the slice
+ * (z80.cycles = 0) when the jump closes a known wait-for-interrupt loop: time spent
+ * spinning there changes nothing, so skipping it is free speed (MAME's idle skip). */
+#ifndef Z80_JP_TAKEN
+#define Z80_JP_TAKEN(target) ((void)0)
 #endif
 
 /* the hot helpers must inline: an i960 call+ret costs ~16 cycles, more than most Z80 ops */
@@ -511,7 +518,10 @@ Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
         return -1;
     case 0xc3: z80.pc = z80_imm16(zp); z80.cycles -= 10; return -1;
     case 0xc2: case 0xca: case 0xd2: case 0xda: case 0xe2: case 0xea: case 0xf2: case 0xfa:
-        a = z80_imm16(zp); if (z80_cond(zp, op >> 3)) z80.pc = a; z80.cycles -= 10; return -1;
+        a = z80_imm16(zp);
+        if (z80_cond(zp, op >> 3)) { z80.pc = a; z80.cycles -= 10; Z80_JP_TAKEN(a); }
+        else z80.cycles -= 10;
+        return -1;
     case 0xe9: z80.pc = zHL; z80.cycles -= 4; return -1;
     case 0xcd: a = z80_imm16(zp); z80_push(zp, z80.pc); z80.pc = a; z80.cycles -= 17; return -1;
     case 0xc4: case 0xcc: case 0xd4: case 0xdc: case 0xe4: case 0xec: case 0xf4: case 0xfc:

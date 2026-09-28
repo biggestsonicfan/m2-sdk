@@ -11,6 +11,7 @@
  *
  * ROMs: `python3 tools/pacrom.py pacman.zip` writes src/pacman_roms.h (gitignored, Namco
  * data). Without it this builds the homebrew board test from src/pactest_rom.h.
+ * src/puckman.c is the same program on the Namco set (src/puckman_roms.h).
  *
  * Controls (Model 2 -> Pac-Man): P1 stick, P2 stick, COIN1/COIN2 = coins, START1/2,
  * SERVICE = credit. No sound yet (Namco WSG), no cocktail flip.
@@ -20,9 +21,13 @@
 #include "m2.h"
 #include "m2_tilefb.h"
 
-#if __has_include("pacman_roms.h")
-#include "pacman_roms.h"
-#define PAC_TITLE "PAC-MAN"
+#ifndef PAC_ROMS                       /* src/puckman.c picks the other set */
+#define PAC_ROMS  "pacman_roms.h"
+#define PAC_NAME  "PAC-MAN"
+#endif
+#if __has_include(PAC_ROMS)
+#include PAC_ROMS
+#define PAC_TITLE PAC_NAME
 #else
 #include "pactest_rom.h"
 #define PAC_TITLE "TEST ROM"
@@ -54,6 +59,23 @@ static void pac_read_inputs(void) {
     pac_in1 = in1;                     /* bit 4 test off, bit 7 = upright cabinet */
 }
 
+/* A tile-palette write goes through the colour-translation table: each 5-bit channel c
+ * reads colorxlat row c, pen 0x40 (MAME sega/model2.cpp palette_w). m2_init's STF table
+ * holds clamp(row * pen) there, which saturates any channel >= 4/31 to full, fine for
+ * pure colours but it turns Pac-Man's blue maze white. Pac-Man draws no polygons, so
+ * make that one column a straight 0..255 ramp. Must run BEFORE the palette writes
+ * (MAME converts a colour when it is written). */
+static void pac_linear_tilepal(void) {
+    volatile u16 *R = (volatile u16 *)0x01810000u;
+    volatile u16 *G = (volatile u16 *)0x01814000u;
+    volatile u16 *B = (volatile u16 *)0x01818000u;
+    u32 c;
+    for (c = 0; c < 32u; c++) {
+        u16 v = (u16)((c * 255u + 15u) / 31u);
+        R[c * 0x100u + 0x40u] = v; G[c * 0x100u + 0x40u] = v; B[c * 0x100u + 0x40u] = v;
+    }
+}
+
 /* copy the changed cells of pac_fb into their char blocks */
 static void pac_blit(void) {
     int i, y;
@@ -77,6 +99,7 @@ int main(void) {
     char buf[8];
 
     m2_init();
+    pac_linear_tilepal();
     tfb_init();
     pac_reset();
     for (i = 0; i < 16; i++) {         /* Pac-Man palette -> tile palette (every FB bank) */

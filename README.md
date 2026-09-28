@@ -157,25 +157,32 @@ MAME's `pacman` driver, ported to the i960: the Z80 is interpreted by `m2_z80.h`
 `src/pacman_hw.h` is the rest of the board (memory map, IM 2 vblank IRQ, inputs, the
 tilemap + 8 sprites, both PROMs). The 224x288 portrait screen sits cell-aligned on the
 System 24 tile plane (`m2_tilefb.h`), and each frame only the changed cells are copied
-to char RAM. It has no sound (Namco WSG) and no cocktail flip.
+to char RAM. It uses no polygons, so it runs the same with MAME's HLE geometry and with
+`M2_HLE_GEO_OFF` (real SHARC). It has no sound (Namco WSG) and no cocktail flip.
 
 ```sh
-python3 tools/pacrom.py path/to/pacman.zip   # -> src/pacman_roms.h (Namco data: git-ignored)
-cmake -G Ninja -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_GAME=pacman
+python3 tools/pacrom.py path/to/pacman.zip    # -> src/pacman_roms.h  (Namco data: git-ignored)
+python3 tools/pacrom.py path/to/puckman.zip   # -> src/puckman_roms.h (for src/puckman.c)
+cmake -G Ninja -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_GAME=pacman   # or puckman
 ninja -C build
 ```
 
-Without `src/pacman_roms.h` it builds a homebrew board test instead (`src/pactest_rom.h`,
-made by `tools/pactest.py`, all original data). The test has text, colours, a frame
-counter, the raw IN0/IN1 bytes, a Pac-Man you steer with the P1 stick, and three ghosts.
-Inputs: P1/P2 sticks, COIN1/2, START1/2, SERVICE = credit.
+Without the ROM header it builds a homebrew board test instead (`src/pactest_rom.h`,
+made by `tools/pactest.py`, all original data). Inputs: P1/P2 sticks, COIN1/2,
+START1/2, SERVICE = credit.
 
-- **Speed:** in MAME, the Z80 alone can do ~104% of real time on the 25 MHz i960 (test
-  ROM with the Z80 never idle). With drawing it's ~90%, so after a frame that overruns its
-  vblank, the next one skips drawing (never two in a row), which holds ~99%. The panel on
-  the left shows the rate; `-DPAC_BENCH` removes the vblank cap to show the headroom.
-  One Pac-Man frame runs per Model 2 vblank, so game time follows the Model 2 refresh,
-  not Pac-Man's 60.6 Hz. Not tried on silicon.
+- **Speed (MAME, real ROMs):** attract and gameplay hold 100% (uncapped, ~220%). The game
+  spends most of each frame in a wait-for-vblank loop (`ld hl,(nn) / ld a,(hl) / and a /
+  jp m`, 0x238D), and the core's `Z80_JP_TAKEN` hook ends the Z80's slice there (idle
+  skip, found by byte pattern at reset). The power-on RAM/ROM test has no such loop and
+  runs at ~43%, so boot takes ~17 s instead of ~8 s. When a frame overruns its vblank,
+  the next one skips drawing (never two in a row). The panel on the left shows the rate;
+  `-DPAC_BENCH` removes the vblank cap. One Pac-Man frame runs per Model 2 vblank, so
+  game time follows the Model 2 refresh, not Pac-Man's 60.6 Hz. Not tried on silicon.
+- **Colours:** a tile-palette write goes through the colour-translation table (row = the
+  5-bit channel, pen 0x40, MAME `palette_w`). The STF table `m2_init` builds saturates
+  that column, so `pacman.c` rewrites it as a linear ramp before loading its palette.
+  Without that, mid-tone colours (the blue maze) come out white.
 - **Tests:** `tools/z80test/z80test.c` runs zexdoc (67/67 pass) against the core on the
   host, and `tools/pachost.c` runs the whole board on the host and writes a PPM.
 - **Run on a stock sfight romset:** every build also writes `roms/<game>/game.bin`, and
@@ -220,8 +227,8 @@ CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
   [`docs/firmware-extraction.md`](docs/firmware-extraction.md), with
   [stf-tools](https://github.com/biggestsonicfan/stf-tools)'s `extract-rom.mjs` as the
   extractor for the two Sonic the Fighters blobs.
-  Built ROM images (`roms/`) and a packed Pac-Man romset (`src/pacman_roms.h`) are
-  git-ignored too.
+  Built ROM images (`roms/`) and packed Pac-Man romsets (`src/pacman_roms.h`,
+  `src/puckman_roms.h`) are git-ignored too.
 - **How this was built:** written with AI assistance (Claude, via Claude Code) throughout.
   See [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) for what the AI did and did not contribute,
   and how much to trust the comments.
