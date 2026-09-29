@@ -224,6 +224,21 @@ START1/2, SERVICE = credit.
   of the same register stream (MAME `namco.cpp`'s model): the siren sweeps 392-914 Hz
   against 400-913 Hz with the same 0.417 s period, and the intro tune's note content
   correlates 0.996. Without the passthrough program the game runs silent ("NO SOUND").
+- **Lockstep with MAME's own Pac-Man:** `tools/lockstep/run.sh` plays one input script
+  (a coin, a start and a pseudo-random stick) into MAME's `pacman` driver and into the i960
+  port under MAME's Model 2 driver, and compares them frame by frame: the Z80's RAM
+  0x4000-0x4FFF, the sprite registers, and every 60th picture. Over 3000 frames 2992 are
+  byte-exact; the other 8 differ in one or two bytes for one frame (the instruction astride
+  the frame edge: MAME's Z80 is cycle-stepped, so at its frame end that one is part done).
+  Pictures: every drawn frame is identical (checked for all of frames 2400-2700 on the host
+  build); the port's misses are frames it did not draw (57.5 Hz display, frameskip in the
+  boot test), and each equals MAME's earlier picture. Getting there took matching MAME in
+  the core and board: registers reset to 0 (IX/IY FFFF), a level-held INT line cleared by the
+  game's latch (`Z80_EXT_IRQ`), whole 4-cycle NOPs in HALT, the vblank IRQ seen by an
+  instruction that ends one cycle before the frame edge, and an idle skip that fast-forwards
+  whole passes of the wait loop only while the task queue really is empty (it used to be
+  able to hold a task over a frame). It also found a sprite-restore bug (a stray pixel for a
+  frame now and then).
 - **Tests:** `tools/z80test/z80test.c` runs zexdoc (67/67 pass) against the core on the
   host, and `tools/pachost.c` runs the whole board on the host and writes a PPM.
 - **In the browser:** `src/pacman_web.c` is Pac-Man without the SHARC boot. A booted SHARC
