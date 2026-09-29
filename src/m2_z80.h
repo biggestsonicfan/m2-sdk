@@ -37,6 +37,11 @@
 #ifndef Z80_JP_TAKEN
 #define Z80_JP_TAKEN(target) ((void)0)
 #endif
+/* Z80_IRQ_HOOK(zp): called as a maskable interrupt is accepted, once PC is pushed and
+ * before the vector is read — the point MAME's Z80 reads the IM 2 vector (lockstep). */
+#ifndef Z80_IRQ_HOOK
+#define Z80_IRQ_HOOK(zp) ((void)0)
+#endif
 /* Z80_EXT_IRQ: an external, level-held INT line (MAME's ASSERT_LINE): re-read at every
  * interrupt check and NOT cleared on acknowledge; the board drops it (e.g. Pac-Man's IRQ
  * enable latch). Z80_EXT_IRQ_VEC: the byte on the bus at acknowledge (IM 0/2). Without
@@ -58,6 +63,7 @@ typedef struct {
     z80_u16 ix, iy, sp, pc;
     z80_u8  i, rr, iff1, iff2, im;
     z80_u8  irq_vec;              /* the byte the board puts on the bus for IM 0/2 */
+    z80_u8  r7;                   /* R bit 7 (only LD R,A sets it); rr counts M1 cycles in 0-6 */
     union {                       /* anything non-zero here sends z80_run down its slow path */
         unsigned int events;
         struct { z80_u8 irq_line, halted, ei_delay, ev_pad_; };   /* irq_line: level-held INT */
@@ -107,7 +113,7 @@ static void z80_reset(void) {
     for (i = 0; i < 8; i++) { z80.r[i] = 0; z80.alt[i] = 0; }
     z80.sp = 0;
     z80.ix = z80.iy = 0xffff;
-    z80.pc = 0; z80.i = 0; z80.rr = 0;
+    z80.pc = 0; z80.i = 0; z80.rr = 0; z80.r7 = 0;
     z80.iff1 = z80.iff2 = 0; z80.im = 0; z80.halted = 0; z80.ei_delay = 0;
     z80.irq_line = 0; z80.irq_vec = 0xff;
 }
@@ -143,6 +149,8 @@ Z80_INL void z80_setr(z80_t *zp, int i, z80_u8 v) {
 
 /* ---- fetch / stack helpers ------------------------------------------------- */
 Z80_INL z80_u8 z80_imm8(z80_t *zp) { return z80_bus_fetch(z80.pc++); }
+/* an opcode fetch (M1 cycle): R counts them, one per opcode byte, two for a prefixed op */
+Z80_INL z80_u8 z80_m1(z80_t *zp) { z80.rr++; return z80_bus_fetch(z80.pc++); }
 Z80_INL z80_u16 z80_imm16(z80_t *zp) {
     z80_u16 lo = z80_bus_fetch(z80.pc); z80_u16 hi = z80_bus_fetch((z80_u16)(z80.pc + 1));
     z80.pc += 2; return (z80_u16)(lo | (hi << 8));
@@ -266,7 +274,7 @@ Z80_INL z80_u16 z80_rp(z80_t *zp, int p, z80_u16 hl) {
 
 /* ---- ED page --------------------------------------------------------------- */
 Z80_INL int z80_exec_ed(z80_t *zp) {
-    z80_u8 op = z80_imm8(zp), v;
+    z80_u8 op = z80_m1(zp), v;
     z80_u16 t;
     switch (op) {
     case 0x40: case 0x48: case 0x50: case 0x58: case 0x60: case 0x68: case 0x70: case 0x78:
@@ -296,10 +304,10 @@ Z80_INL int z80_exec_ed(z80_t *zp) {
     case 0x56: case 0x76: z80.im = 1; z80.cycles -= 8; return -1;
     case 0x5e: case 0x7e: z80.im = 2; z80.cycles -= 8; return -1;
     case 0x47: z80.i = zA; z80.cycles -= 9; return -1;
-    case 0x4f: z80.rr = zA; z80.cycles -= 9; return -1;
+    case 0x4f: z80.rr = z80.r7 = zA; z80.cycles -= 9; return -1;
     case 0x57: zA = z80.i;
         zF = (z80_u8)((zF & Z80_CF) | z80_sz[zA] | (z80.iff2 ? Z80_PF : 0)); z80.cycles -= 9; return -1;
-    case 0x5f: zA = (z80_u8)((z80.rr & 0x80) | ((z80.rr + (z80.cycles >> 2)) & 0x7f)); /* R, approximated */
+    case 0x5f: zA = (z80_u8)((z80.r7 & 0x80) | (z80.rr & 0x7f));
         zF = (z80_u8)((zF & Z80_CF) | z80_sz[zA] | (z80.iff2 ? Z80_PF : 0)); z80.cycles -= 9; return -1;
     case 0x67: v = z80_bus_rd(zHL);                                         /* RRD */
         z80_bus_wr(zHL, (z80_u8)((zA << 4) | (v >> 4)));
@@ -355,7 +363,7 @@ Z80_INL int z80_exec_ed(z80_t *zp) {
 
 /* ---- CB page (plain, on B..A and (HL)) -------------------------------------- */
 Z80_INL void z80_exec_cb(z80_t *zp) {
-    z80_u8 op = z80_imm8(zp), v;
+    z80_u8 op = z80_m1(zp), v;
     int reg = op & 7, b = (op >> 3) & 7;
     v = (reg == 6) ? z80_bus_rd(zHL) : z80_getr(zp, reg);
     switch (op >> 6) {
@@ -371,7 +379,7 @@ Z80_INL void z80_exec_cb(z80_t *zp) {
 
 /* ---- DD/FD page: `xy` is IX or IY ------------------------------------------ */
 Z80_INL int z80_exec_xy(z80_t *zp, z80_u16 *xy) {
-    z80_u8 op = z80_imm8(zp), v;
+    z80_u8 op = z80_m1(zp), v;
     z80_u16 a;
 #define XH ((z80_u8)(*xy >> 8))
 #define XL ((z80_u8)*xy)
@@ -594,6 +602,7 @@ Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
  * — z80_run also drops it on acknowledge so a board that never clears it can't storm. */
 Z80_INL void z80_take_irq(z80_t *zp) {
     z80.halted = 0;
+    z80.rr++;                                       /* the acknowledge is an M1 cycle */
     z80.iff1 = z80.iff2 = 0;
 #ifdef Z80_EXT_IRQ_VEC
     z80.irq_vec = (z80_u8)(Z80_EXT_IRQ_VEC);
@@ -602,11 +611,11 @@ Z80_INL void z80_take_irq(z80_t *zp) {
     z80.irq_line = 0;
 #endif
     switch (z80.im) {
-    case 2: z80_push(zp, z80.pc);
+    case 2: z80_push(zp, z80.pc); Z80_IRQ_HOOK(zp);
         z80.pc = z80_rd16(zp, (z80_u16)((z80.i << 8) | (z80.irq_vec & 0xfe)));
         z80.cycles -= 19; break;
-    case 1: z80_push(zp, z80.pc); z80.pc = 0x38; z80.cycles -= 13; break;
-    default: z80_push(zp, z80.pc); z80.pc = (z80_u16)(z80.irq_vec & 0x38); z80.cycles -= 13; break; /* RST only */
+    case 1: z80_push(zp, z80.pc); Z80_IRQ_HOOK(zp); z80.pc = 0x38; z80.cycles -= 13; break;
+    default: z80_push(zp, z80.pc); Z80_IRQ_HOOK(zp); z80.pc = (z80_u16)(z80.irq_vec & 0x38); z80.cycles -= 13; break; /* RST only */
     }
 }
 
@@ -626,20 +635,21 @@ static void z80_run(int cycles) {
         if (s.events) {
             if (s.irq_line && s.iff1 && !s.ei_delay) { z80_take_irq(zp); continue; }
             if (s.halted) {                                /* burn the rest in HALT NOPs */
-                if (s.ei_delay) { s.ei_delay = 0; s.cycles -= 4; continue; }  /* one NOP first */
+                if (s.ei_delay) { s.ei_delay = 0; s.rr++; s.cycles -= 4; continue; }  /* one NOP first */
                 if (s.irq_line && s.iff1) continue;
+                s.rr = (z80_u8)(s.rr + ((s.cycles + 3) >> 2));   /* an M1 each */
                 s.cycles -= (s.cycles + 3) & ~3;           /* whole 4-cycle NOPs: ends up to 3 */
                 break;                                     /* past the slice, as the CPU does */
             }
             if (s.ei_delay) {                              /* one op after EI, then look again */
                 s.ei_delay = 0;
-                op = z80_imm8(zp);
+                op = z80_m1(zp);
                 do op = z80_exec_main(zp, (z80_u8)op); while (op >= 0);
                 continue;
             }
         }
         do {
-            op = z80_imm8(zp);
+            op = z80_m1(zp);
             do op = z80_exec_main(zp, (z80_u8)op); while (op >= 0);
         } while (op == -1 && s.cycles > 0);
     }
