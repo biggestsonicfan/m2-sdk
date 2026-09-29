@@ -184,8 +184,8 @@ START1/2, SERVICE = credit.
 
 - **Speed (MAME, real ROMs):** attract and gameplay hold 100% of real Pac-Man speed
   (uncapped, ~410% with the SHARC and sound running, recompiled). Boot, from program
-  start to the attract loop, takes 10.4 s against 9.0 s on the real board (1.2 s of it is
-  SDK/SHARC/sound setup); interpreted it is 14.5 s. The game spends most of each frame in
+  start to the attract loop, takes 9.8 s against 9.0 s on the real board (0.6 s of it is
+  SDK/SHARC setup; the sound waveforms upload in the background); interpreted it is 14.5 s. The game spends most of each frame in
   a wait-for-vblank loop (`ld hl,(nn) / ld a,(hl) / and a / jp m`, 0x238D), and the
   core's `Z80_JP_TAKEN` hook ends the Z80's slice there (idle skip, found by byte pattern
   at reset). When a frame overruns its vblank the next one skips drawing (at most three
