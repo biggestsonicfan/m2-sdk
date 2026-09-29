@@ -240,6 +240,16 @@ START1/2, SERVICE = credit.
   device rate (44.1 kHz here) while MAME sends 48 kHz, which kept its buffer full
   (~0.45 s behind) and dropping samples; the fix is in the MAME fork
   (`biggestsonicfan/mame` branch `web-audio-latency`, `src/osd/modules/sound/js_sound.js`).
+- **Standalone (EPROMs):** a Pac-Man build also writes the sound program EPROM
+  `roms/epr-19021.31` (`tools/snd2rom.py`: `snd/scsp_passthru.bin` in a 512 KB image, words
+  low byte first like the original dump, the rest 0xFF). So sfight with three chips replaced,
+  `epr-19001.15` + `epr-19002.16` (program) and `epr-19021.31` (sound), runs Pac-Man with
+  sound and no loader; checked in MAME (m2sharc, HLE geometry and `M2_HLE_GEO_OFF`) against
+  the WSG reference (siren 399-915 Hz vs 400-913 Hz, intro note correlation 0.997). With
+  only the two program EPROMs swapped it runs silent ("NO SOUND"): the i960 has no path to
+  the sound board but the MIDI bytes into its 68000 program. Burn the `pacman` build (not
+  `pacman_web`, whose `sinr` idle needs the i960 FPU: fine on hardware, not on m2emulator).
+  Not tried on a real board.
 - **Run on a stock sfight romset:** every build also writes `roms/<game>/game.bin`, and
   `tools/m2_load.lua` (an `-autoboot_script`) copies it over the program ROM region, and
   `snd/scsp_passthru.bin` over the sound program (`$M2_SOUND_BIN`, or
