@@ -224,6 +224,12 @@ START1/2, SERVICE = credit.
   correlates 0.996. Without the passthrough program the game runs silent ("NO SOUND").
 - **Tests:** `tools/z80test/z80test.c` runs zexdoc (67/67 pass) against the core on the
   host, and `tools/pachost.c` runs the whole board on the host and writes a PPM.
+- **In the browser:** `src/pacman_web.c` is Pac-Man without the SHARC boot. A booted SHARC
+  keeps MAME emulating its firmware's loop every frame, and Pac-Man gives it no work, so
+  leaving it out makes MAME itself ~2.7x faster (native MAME: 60% -> 160% of real time).
+  It runs at full speed in a web (Emscripten) MAME built with the Model 2 driver
+  (`emmake make SUBTARGET=m2 SOURCES=src/mame/sega/model2.cpp`), with `m2_load.lua`,
+  `game.bin` and `scsp_passthru.bin` in `/files` and sfight/schamp/segabill in `/roms`.
 - **Run on a stock sfight romset:** every build also writes `roms/<game>/game.bin`, and
   `tools/m2_load.lua` (an `-autoboot_script`) copies it over the program ROM region, and
   `snd/scsp_passthru.bin` over the sound program (`$M2_SOUND_BIN`, or
