@@ -17,3 +17,5 @@ src/puckman_roms.h
 src/pacman_recomp.h
 src/puckman_recomp.h
 !snd/scsp_passthru.bin
+src/sonic_rom.h
+src/sonic_recomp.h
