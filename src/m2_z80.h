@@ -239,7 +239,7 @@ Z80_INL z80_u16 z80_rp(z80_t *zp, int p, z80_u16 hl) {
 }
 
 /* ---- ED page --------------------------------------------------------------- */
-Z80_INL void z80_exec_ed(z80_t *zp) {
+Z80_INL int z80_exec_ed(z80_t *zp) {
     z80_u8 op = z80_imm8(zp), v;
     z80_u16 t;
     switch (op) {
@@ -247,42 +247,42 @@ Z80_INL void z80_exec_ed(z80_t *zp) {
         v = z80_bus_in(zBC);                                   /* IN r,(C) */
         zF = (z80_u8)((zF & Z80_CF) | z80_szp[v]);
         if (op != 0x70) z80.r[(op >> 3) & 7] = v;
-        z80.cycles -= 12; return;
+        z80.cycles -= 12; return -1;
     case 0x41: case 0x49: case 0x51: case 0x59: case 0x61: case 0x69: case 0x71: case 0x79:
         z80_bus_out(zBC, op == 0x71 ? 0 : z80.r[(op >> 3) & 7]); /* OUT (C),r */
-        z80.cycles -= 12; return;
+        z80.cycles -= 12; return -1;
     case 0x42: case 0x52: case 0x62: case 0x72:
-        z80_sbc16(zp, z80_rp(zp, op >> 4, zHL)); z80.cycles -= 15; return;
+        z80_sbc16(zp, z80_rp(zp, op >> 4, zHL)); z80.cycles -= 15; return -1;
     case 0x4a: case 0x5a: case 0x6a: case 0x7a:
-        z80_adc16(zp, z80_rp(zp, op >> 4, zHL)); z80.cycles -= 15; return;
+        z80_adc16(zp, z80_rp(zp, op >> 4, zHL)); z80.cycles -= 15; return -1;
     case 0x43: case 0x53: case 0x63: case 0x73:
-        z80_wr16(zp, z80_imm16(zp), z80_rp(zp, op >> 4, zHL)); z80.cycles -= 20; return;
+        z80_wr16(zp, z80_imm16(zp), z80_rp(zp, op >> 4, zHL)); z80.cycles -= 20; return -1;
     case 0x4b: case 0x5b: case 0x6b: case 0x7b:
         t = z80_rd16(zp, z80_imm16(zp));
         switch ((op >> 4) & 3) { case 0: zSET_BC(t); break; case 1: zSET_DE(t); break;
                                  case 2: zSET_HL(t); break; default: z80.sp = t; }
-        z80.cycles -= 20; return;
+        z80.cycles -= 20; return -1;
     case 0x44: case 0x4c: case 0x54: case 0x5c: case 0x64: case 0x6c: case 0x74: case 0x7c:
-        v = zA; zA = 0; z80_sub8(zp, v, 0); z80.cycles -= 8; return;        /* NEG */
+        v = zA; zA = 0; z80_sub8(zp, v, 0); z80.cycles -= 8; return -1;        /* NEG */
     case 0x45: case 0x55: case 0x65: case 0x75: case 0x4d: case 0x5d: case 0x6d: case 0x7d:
-        z80.iff1 = z80.iff2; z80.pc = z80_pop(zp); z80.cycles -= 14; return; /* RETN/RETI */
-    case 0x46: case 0x4e: case 0x66: case 0x6e: z80.im = 0; z80.cycles -= 8; return;
-    case 0x56: case 0x76: z80.im = 1; z80.cycles -= 8; return;
-    case 0x5e: case 0x7e: z80.im = 2; z80.cycles -= 8; return;
-    case 0x47: z80.i = zA; z80.cycles -= 9; return;
-    case 0x4f: z80.rr = zA; z80.cycles -= 9; return;
+        z80.iff1 = z80.iff2; z80.pc = z80_pop(zp); z80.cycles -= 14; return -2; /* RETN/RETI */
+    case 0x46: case 0x4e: case 0x66: case 0x6e: z80.im = 0; z80.cycles -= 8; return -1;
+    case 0x56: case 0x76: z80.im = 1; z80.cycles -= 8; return -1;
+    case 0x5e: case 0x7e: z80.im = 2; z80.cycles -= 8; return -1;
+    case 0x47: z80.i = zA; z80.cycles -= 9; return -1;
+    case 0x4f: z80.rr = zA; z80.cycles -= 9; return -1;
     case 0x57: zA = z80.i;
-        zF = (z80_u8)((zF & Z80_CF) | z80_sz[zA] | (z80.iff2 ? Z80_PF : 0)); z80.cycles -= 9; return;
+        zF = (z80_u8)((zF & Z80_CF) | z80_sz[zA] | (z80.iff2 ? Z80_PF : 0)); z80.cycles -= 9; return -1;
     case 0x5f: zA = (z80_u8)((z80.rr & 0x80) | ((z80.rr + (z80.cycles >> 2)) & 0x7f)); /* R, approximated */
-        zF = (z80_u8)((zF & Z80_CF) | z80_sz[zA] | (z80.iff2 ? Z80_PF : 0)); z80.cycles -= 9; return;
+        zF = (z80_u8)((zF & Z80_CF) | z80_sz[zA] | (z80.iff2 ? Z80_PF : 0)); z80.cycles -= 9; return -1;
     case 0x67: v = z80_bus_rd(zHL);                                         /* RRD */
         z80_bus_wr(zHL, (z80_u8)((zA << 4) | (v >> 4)));
         zA = (z80_u8)((zA & 0xf0) | (v & 0x0f));
-        zF = (z80_u8)((zF & Z80_CF) | z80_szp[zA]); z80.cycles -= 18; return;
+        zF = (z80_u8)((zF & Z80_CF) | z80_szp[zA]); z80.cycles -= 18; return -1;
     case 0x6f: v = z80_bus_rd(zHL);                                         /* RLD */
         z80_bus_wr(zHL, (z80_u8)((v << 4) | (zA & 0x0f)));
         zA = (z80_u8)((zA & 0xf0) | (v >> 4));
-        zF = (z80_u8)((zF & Z80_CF) | z80_szp[zA]); z80.cycles -= 18; return;
+        zF = (z80_u8)((zF & Z80_CF) | z80_szp[zA]); z80.cycles -= 18; return -1;
 
     case 0xa0: case 0xb0: case 0xa8: case 0xb8: {                       /* LDI LDIR LDD LDDR */
         int d = (op & 8) ? -1 : 1;
@@ -293,7 +293,7 @@ Z80_INL void z80_exec_ed(z80_t *zp) {
         zF = (z80_u8)((zF & (Z80_SF | Z80_ZF | Z80_CF)) | (zBC ? Z80_PF : 0)
                       | (n & Z80_XF) | ((n << 4) & Z80_YF));
         if ((op & 0x10) && zBC) { z80.pc -= 2; z80.cycles -= 21; } else z80.cycles -= 16;
-        return;
+        return -1;
     }
     case 0xa1: case 0xb1: case 0xa9: case 0xb9: {                       /* CPI CPIR CPD CPDR */
         int d = (op & 8) ? -1 : 1;
@@ -305,7 +305,7 @@ Z80_INL void z80_exec_ed(z80_t *zp) {
         n = (z80_u8)(r - ((zF & Z80_HF) ? 1 : 0));
         zF |= (z80_u8)((n & Z80_XF) | ((n << 4) & Z80_YF));
         if ((op & 0x10) && zBC && r) { z80.pc -= 2; z80.cycles -= 21; } else z80.cycles -= 16;
-        return;
+        return -1;
     }
     case 0xa2: case 0xb2: case 0xaa: case 0xba: {                       /* INI INIR IND INDR */
         int d = (op & 8) ? -1 : 1;
@@ -313,7 +313,7 @@ Z80_INL void z80_exec_ed(z80_t *zp) {
         zSET_HL(zHL + d); zB--;
         zF = (z80_u8)(Z80_NF | z80_sz[zB]);
         if ((op & 0x10) && zB) { z80.pc -= 2; z80.cycles -= 21; } else z80.cycles -= 16;
-        return;
+        return -1;
     }
     case 0xa3: case 0xb3: case 0xab: case 0xbb: {                       /* OUTI OTIR OUTD OTDR */
         int d = (op & 8) ? -1 : 1;
@@ -321,9 +321,9 @@ Z80_INL void z80_exec_ed(z80_t *zp) {
         zSET_HL(zHL + d);
         zF = (z80_u8)(Z80_NF | z80_sz[zB]);
         if ((op & 0x10) && zB) { z80.pc -= 2; z80.cycles -= 21; } else z80.cycles -= 16;
-        return;
+        return -1;
     }
-    default: z80.cycles -= 8; return;                                   /* ED NOP */
+    default: z80.cycles -= 8; return -1;                                   /* ED NOP */
     }
 }
 
@@ -415,8 +415,9 @@ Z80_INL int z80_exec_xy(z80_t *zp, z80_u16 *xy) {
 }
 
 /* ---- main page ---------------------------------------------------------------
- * Returns -1, or an opcode the caller must run next: DD/FD followed by an opcode that
- * doesn't use HL (the prefix only costs its 4 T-states). */
+ * Returns -1, -2 after an op that changed the interrupt state (EI, HALT, RETN/RETI: the
+ * run loop re-checks it), or an opcode the caller must run next: DD/FD followed by an
+ * opcode that doesn't use HL (the prefix only costs its 4 T-states). */
 Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
     z80_u8 v;
     z80_u16 a;
@@ -424,7 +425,7 @@ Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
     /* LD r,r' and ALU A,r: one case per opcode with constant operands, so each compiles to
      * a couple of loads/stores instead of a runtime decode of the register fields */
 #define Z80_LD(o) case (o): \
-        if (((o) & 7) == 6 && (((o) >> 3) & 7) == 6) { z80.halted = 1; z80.cycles -= 4; }     /* HALT */ \
+        if (((o) & 7) == 6 && (((o) >> 3) & 7) == 6) { z80.halted = 1; z80.cycles -= 4; return -2; } /* HALT */ \
         else if (((o) & 7) == 6) { z80.r[((o) >> 3) & 7] = z80_bus_rd(zHL); z80.cycles -= 7; } \
         else if ((((o) >> 3) & 7) == 6) { z80_bus_wr(zHL, z80.r[(o) & 7]); z80.cycles -= 7; } \
         else { z80.r[((o) >> 3) & 7] = z80.r[(o) & 7]; z80.cycles -= 4; } \
@@ -548,9 +549,9 @@ Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
     case 0xdb: v = z80_imm8(zp); zA = z80_bus_in((z80_u16)((zA << 8) | v)); z80.cycles -= 11; return -1;
     case 0xf9: z80.sp = zHL; z80.cycles -= 6; return -1;
     case 0xf3: z80.iff1 = z80.iff2 = 0; z80.cycles -= 4; return -1;
-    case 0xfb: z80.iff1 = z80.iff2 = 1; z80.ei_delay = 1; z80.cycles -= 4; return -1;
+    case 0xfb: z80.iff1 = z80.iff2 = 1; z80.ei_delay = 1; z80.cycles -= 4; return -2;
     case 0xcb: z80_exec_cb(zp); return -1;
-    case 0xed: z80_exec_ed(zp); return -1;
+    case 0xed: return z80_exec_ed(zp);
     case 0xdd: return z80_exec_xy(zp, &z80.ix);
     case 0xfd: return z80_exec_xy(zp, &z80.iy);
     default: z80.cycles -= 4; return -1;
@@ -575,23 +576,31 @@ Z80_INL void z80_take_irq(z80_t *zp) {
 
 #undef z80
 
-/* Run for (at least) `cycles` T-states. */
+/* Run for (at least) `cycles` T-states. The interrupt/HALT/EI state only changes between
+ * slices (the board raises irq_line) or on the ops that return -2, so the inner loop
+ * only tests the cycle count. */
 static void z80_run(int cycles) {
     z80_t s = z80, *zp = &s;
+    int op;
     s.cycles += cycles;
     while (s.cycles > 0) {
         if (s.events) {
             if (s.irq_line && s.iff1 && !s.ei_delay) { z80_take_irq(zp); continue; }
-            s.ei_delay = 0;
             if (s.halted) {                                /* burn the rest in HALT NOPs */
                 if (s.irq_line && s.iff1) continue;
                 s.cycles = 0; break;
             }
+            if (s.ei_delay) {                              /* one op after EI, then look again */
+                s.ei_delay = 0;
+                op = z80_imm8(zp);
+                do op = z80_exec_main(zp, (z80_u8)op); while (op >= 0);
+                continue;
+            }
         }
-        {
-            int op = z80_imm8(zp);
+        do {
+            op = z80_imm8(zp);
             do op = z80_exec_main(zp, (z80_u8)op); while (op >= 0);
-        }
+        } while (op == -1 && s.cycles > 0);
     }
     z80 = s;
 }

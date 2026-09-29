@@ -175,7 +175,7 @@ START1/2, SERVICE = credit.
   spends most of each frame in a wait-for-vblank loop (`ld hl,(nn) / ld a,(hl) / and a /
   jp m`, 0x238D), and the core's `Z80_JP_TAKEN` hook ends the Z80's slice there (idle
   skip, found by byte pattern at reset). The power-on RAM/ROM test has no such loop and
-  runs at ~43%, so boot takes ~17 s instead of ~8 s. When a frame overruns its vblank,
+  runs at ~51%, so boot takes ~15 s instead of ~8 s. When a frame overruns its vblank,
   the next one skips drawing (never two in a row). The panel on the left shows the rate;
   `-DPAC_BENCH` removes the vblank cap. One Pac-Man frame runs per Model 2 vblank, so
   game time follows the Model 2 refresh, not Pac-Man's 60.6 Hz. Not tried on silicon.
