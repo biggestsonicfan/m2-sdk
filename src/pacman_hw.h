@@ -26,12 +26,13 @@
 #define PAC_TW     28                  /* portrait cells */
 #define PAC_TH     36
 #define PAC_CELLS  (PAC_TW * PAC_TH)   /* 1008 */
-#define PAC_CYCLES_PER_FRAME 50688     /* 3.072 MHz / 60.606 Hz */
+#define PAC_CYCLES_PER_FRAME 50688     /* 3.072 MHz / 60.606 Hz: 384 x 264 pixels at 6.144 MHz */
 
 /* ---- board state ----------------------------------------------------------- */
 static u8  pac_ram[0x1000];            /* 0x4000-0x4FFF: video, colour, (gap), work+sprite RAM */
 static u8  pac_spr_xy[16];             /* 0x5060-0x506F sprite coordinates (write-only) */
 static u8  pac_irq_mask, pac_vector;
+static u8  pac_irq_line;                /* INT: raised at vblank if enabled, held until the latch clears it */
 static u8  pac_in0 = 0xff, pac_in1 = 0xff;   /* active-low, set by the host each frame */
 static u8  pac_dsw1 = 0xc9;            /* MAME defaults: 1 coin 1 credit, 3 lives, bonus 10000 */
 static u8  pac_snd[32];                /* WSG registers 0x5040-0x505F (4 bits each) */
@@ -51,9 +52,8 @@ static u16 pac_tilepat[256][8];        /* per char: 8 portrait rows, 2bpp, px0 i
 static u8  pac_sprpat[64][16][16];     /* per sprite: native orientation pixels 0..3 */
 static u16 pac_lut4[64][256];          /* colour c: 4 x 2bpp pixels -> 4 x 4bpp nibbles */
 static u8  pac_colour[64][4];          /* colour c, pixel p -> palette index 0..15 */
-static u16 pac_spr_cells[2][16 * 9];   /* cells the sprites covered, previous/current frame */
-static int pac_spr_ncells[2];
-static int pac_spr_cur;
+static u16 pac_spr_cells[16 * 9];      /* cells the sprites covered in the last drawn frame */
+static int pac_spr_ncells;
 static u8  pac_spr_mark[PAC_CELLS];    /* == pac_spr_stamp: cell already in the current list */
 static u8  pac_spr_stamp;
 
@@ -99,7 +99,10 @@ static __attribute__((noinline)) void pac_wr_slow(u16 a, u8 v) {
     }
     if (a >= 0x5060 && a < 0x5070) { pac_spr_xy[a & 15] = v; return; }
     if ((a & 0xffe0) == 0x5040) { pac_snd[a & 31] = v & 15; return; }   /* Namco WSG */
-    if ((a & 0xffc7) == 0x5000) pac_irq_mask = v & 1;   /* 0x5000 latch bit 0: IRQ enable */
+    if ((a & 0xffc7) == 0x5000) {                       /* 0x5000 latch bit 0: IRQ enable */
+        pac_irq_mask = v & 1;
+        if (!pac_irq_mask) pac_irq_line = 0;            /* MAME pacman irq_mask_w: CLEAR_LINE */
+    }
     if ((a & 0xffc7) == 0x5001) pac_snd_on = v & 1;     /* 0x5001 latch bit 1: sound enable */
     /* 0x5003 flip, 0x50C0 watchdog: ignored */
 }
@@ -113,12 +116,30 @@ static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
 #define Z80_WR(a, v)  pac_wr(a, v)
 #define Z80_IN(p)     ((void)(p), 0xff)
 #define Z80_OUT(p, v) ((void)(p), pac_vector = (v)) /* any port: the IM 2 vector latch */
+/* INT as MAME's pacman driver drives it: asserted at vblank while the latch enables it,
+ * held (not cleared by the acknowledge) until the game clears the latch; the vector is
+ * whatever OUT (0) last wrote, read at acknowledge (pacman_state::interrupt_vector_r) */
+#define Z80_EXT_IRQ     pac_irq_line
+#define Z80_EXT_IRQ_VEC pac_vector
 #define Z80_FETCH(a)  (((a) & 0x7fff) < 0x4000 ? pac_rom[(a) & 0x3fff] : pac_rd(a))
 /* idle skip: the game's main loop spins on its task queue (`ld hl,(nn); ld a,(hl);
  * and a; jp m,loop`, 0x238D in pacman/puckman) until the vblank IRQ queues work; once
- * it loops, nothing changes before that IRQ, so end the Z80's slice right there. */
+ * it loops, nothing changes before that IRQ, so fast-forward it to the slice end. */
 static int pac_idle_pc = -1;           /* found by pac_find_idle(); -1 = none */
-#define Z80_JP_TAKEN(t) do { if ((int)(t) == pac_idle_pc) z80.cycles = 0; } while (0)
+#define PAC_IDLE_LOOP_CYCLES 37         /* ld hl,(nn) 16 + ld a,(hl) 7 + and a 4 + jp m 10 */
+/* skip whole passes of the loop (it only reads) and run the last one normally, so the IRQ
+ * interrupts it at the same instruction as a CPU that looped all the way (lockstep-exact
+ * with MAME, return address on the stack included) */
+static u16 pac_idle_ptr;                /* the loop's `ld hl,(nn)` operand: the queue pointer */
+/* only while the queue really is empty: an IRQ between `ld a,(hl)` and `jp m` can queue a
+ * task, and the jump is then taken on the stale value; the loop finds it on its next pass */
+static inline int pac_idle_empty(void) {
+    u16 slot = (u16)(pac_rd(pac_idle_ptr) | (pac_rd((u16)(pac_idle_ptr + 1)) << 8));
+    return (pac_rd(slot) & 0x80) != 0;
+}
+#define Z80_JP_TAKEN(t) do { if ((int)(t) == pac_idle_pc && z80.cycles > PAC_IDLE_LOOP_CYCLES \
+        && pac_idle_empty()) \
+        z80.cycles -= (z80.cycles - 1) / PAC_IDLE_LOOP_CYCLES * PAC_IDLE_LOOP_CYCLES; } while (0)
 #include "m2_z80.h"
 /* PAC_RECOMP names a header from tools/z80recomp.py (e.g. "pacman_recomp.h"): the traced
  * ROM code statically recompiled into z80_run_rc, which then replaces z80_run. */
@@ -194,6 +215,7 @@ static void pac_find_idle(void) {
         if (pac_rom[i] == 0x2a && pac_rom[i + 3] == 0x7e && pac_rom[i + 4] == 0xa7
             && pac_rom[i + 5] == 0xfa && (pac_rom[i + 6] | (pac_rom[i + 7] << 8)) == i) {
             pac_idle_pc = i;
+            pac_idle_ptr = (u16)(pac_rom[i + 1] | (pac_rom[i + 2] << 8));
             return;
         }
 }
@@ -201,9 +223,13 @@ static void pac_find_idle(void) {
 static void pac_reset(void) {
     pac_video_init();
     pac_find_idle();
-    pac_irq_mask = 0; pac_vector = 0;
-    pac_spr_ncells[0] = pac_spr_ncells[1] = 0;
+    pac_irq_mask = 0; pac_vector = 0; pac_irq_line = 0;
+    pac_spr_ncells = 0;
     z80_reset();
+    /* Lockstep with MAME's pacman driver (tools/lockstep): its vblank IRQ is taken at the
+     * first instruction boundary at or after 1 cycle before each 50688-cycle frame edge;
+     * one cycle of debt at reset puts every slice end, and so the IRQ, exactly there */
+    z80.cycles = -1;
 }
 
 /* ---- render ---------------------------------------------------------------- */
@@ -223,7 +249,6 @@ static void pac_draw_sprite(int n, int sx, int sy) {
     const u8 *col = pac_colour[pac_ram[0xff1 + 2 * n] & 0x1f];
     int code = attr >> 2, fx = attr & 1, fy = (attr >> 1) & 1;
     int i0 = 16 - sx, i1 = PAC_H - 16 - sx, j0 = -sy, j1 = PAC_W - sy, i, j;
-    u16 *list = pac_spr_cells[pac_spr_cur];
     /* portrait rows py = sx+i must be in 16..271 (spriteclip rows 2..33), columns
      * px = 223-(sy+j) in 0..223 */
     if (i0 < 0) i0 = 0;
@@ -243,7 +268,7 @@ static void pac_draw_sprite(int n, int sx, int sy) {
             pac_fb[cell][py & 7] = (pac_fb[cell][py & 7] & keep) | ((u32)ci << s);
             if (pac_spr_mark[cell] != pac_spr_stamp) {   /* restore this cell next frame */
                 pac_spr_mark[cell] = pac_spr_stamp;
-                list[pac_spr_ncells[pac_spr_cur]++] = (u16)cell;
+                pac_spr_cells[pac_spr_ncells++] = (u16)cell;
                 pac_mark_copy(cell);
             }
         }
@@ -253,16 +278,17 @@ static void pac_draw_sprite(int n, int sx, int sy) {
 /* Build this frame: redraw changed cells and the cells last frame's sprites covered,
  * then draw the sprites on top (MAME order: 7..3, then 2..0 one pixel over). */
 static void pac_render(void) {
-    int i, c, prev = pac_spr_cur ^ 1, n;
-    for (i = 0; i < pac_spr_ncells[prev]; i++) pac_mark_tile(pac_spr_cells[prev][i]);
-    pac_spr_ncells[prev] = 0;
+    int i, c, n;
+    /* the cells last frame's sprites covered go back to their tiles, then this frame's
+     * sprites refill the list (the list is the last *drawn* frame's: frameskip-safe) */
+    for (i = 0; i < pac_spr_ncells; i++) pac_mark_tile(pac_spr_cells[i]);
+    pac_spr_ncells = 0;
     for (i = 0; i < pac_tn; i++) {
         c = pac_tlist[i];
         pac_draw_cell(c);
         pac_tile_dirty[c] = 0;
     }
     pac_tn = 0;
-    pac_spr_cur = prev;
     if (++pac_spr_stamp == 0) {                          /* stamp wrapped: forget old marks */
         for (c = 0; c < PAC_CELLS; c++) pac_spr_mark[c] = 0;
         pac_spr_stamp = 1;
@@ -275,15 +301,17 @@ static void pac_render(void) {
     }
 }
 
-/* One video frame: the Z80 runs a frame's worth of cycles, then vblank raises the IRQ
- * (if enabled) and the screen is rendered — unless `render` is 0 (frameskip: changes keep
+/* One video frame: the Z80 runs a frame's worth of cycles, then vblank raises the IRQ (if
+ * enabled) and the screen is rendered. Under MAME's pacman driver vblank (IRQ + screen
+ * update + frame_done) likewise falls every 50688 cycles from reset, so frame k here ends
+ * where MAME's frame k does. `render` 0 skips the picture (frameskip: changes keep
  * collecting in the dirty lists and show up on the next rendered frame). */
 static u32 pac_frames;                 /* emulated frames so far */
 
 static void pac_frame(int render) {
     pac_frames++;
     PAC_Z80_RUN(PAC_CYCLES_PER_FRAME);
-    if (pac_irq_mask) { z80.irq_line = 1; z80.irq_vec = pac_vector; }
+    if (pac_irq_mask) pac_irq_line = 1;             /* vblank: MAME pacman vblank_irq */
 #ifndef PAC_NORENDER
     if (render) pac_render();
 #endif

@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
             left -= 1 - z80.cycles;
             z80.cycles = 0;
         }
-        if (pac_irq_mask) { z80.irq_line = 1; z80.irq_vec = pac_vector; }
+        if (pac_irq_mask) pac_irq_line = 1;            /* vblank, as pac_frame */
     }
     for (i = 0; i < 0x4000; i++) if (seen[i]) { printf("%04x\n", i); n++; }
     fprintf(stderr, "%d instruction addresses over %d frames\n", n, frames);

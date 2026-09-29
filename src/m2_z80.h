@@ -37,6 +37,10 @@
 #ifndef Z80_JP_TAKEN
 #define Z80_JP_TAKEN(target) ((void)0)
 #endif
+/* Z80_EXT_IRQ: an external, level-held INT line (MAME's ASSERT_LINE): re-read at every
+ * interrupt check and NOT cleared on acknowledge; the board drops it (e.g. Pac-Man's IRQ
+ * enable latch). Z80_EXT_IRQ_VEC: the byte on the bus at acknowledge (IM 0/2). Without
+ * them the board sets z80.irq_line / z80.irq_vec between slices and acknowledge clears it. */
 
 /* the hot helpers must inline: an i960 call+ret costs ~16 cycles, more than most Z80 ops */
 #define Z80_INL static inline __attribute__((always_inline))
@@ -96,8 +100,13 @@ static void z80_reset(void) {
         { int b, n = 0; for (b = 0; b < 8; b++) n += (i >> b) & 1;
           z80_szp[i] = (z80_u8)(z80_sz[i] | ((n & 1) ? 0 : Z80_PF)); }
     }
-    for (i = 0; i < 8; i++) { z80.r[i] = 0xff; z80.alt[i] = 0xff; }
-    z80.ix = z80.iy = z80.sp = 0xffff;
+    /* A real Z80 powers up with most registers undefined; these are the values MAME's Z80
+     * has after reset (z80.cpp: 0, IX/IY FFFF as its debugger shows them), so a game that
+     * runs with uninitialised registers (Pac-Man's boot test does) takes the same path and
+     * time as under MAME */
+    for (i = 0; i < 8; i++) { z80.r[i] = 0; z80.alt[i] = 0; }
+    z80.sp = 0;
+    z80.ix = z80.iy = 0xffff;
     z80.pc = 0; z80.i = 0; z80.rr = 0;
     z80.iff1 = z80.iff2 = 0; z80.im = 0; z80.halted = 0; z80.ei_delay = 0;
     z80.irq_line = 0; z80.irq_vec = 0xff;
@@ -586,7 +595,12 @@ Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
 Z80_INL void z80_take_irq(z80_t *zp) {
     z80.halted = 0;
     z80.iff1 = z80.iff2 = 0;
+#ifdef Z80_EXT_IRQ_VEC
+    z80.irq_vec = (z80_u8)(Z80_EXT_IRQ_VEC);
+#endif
+#ifndef Z80_EXT_IRQ
     z80.irq_line = 0;
+#endif
     switch (z80.im) {
     case 2: z80_push(zp, z80.pc);
         z80.pc = z80_rd16(zp, (z80_u16)((z80.i << 8) | (z80.irq_vec & 0xfe)));
@@ -606,11 +620,16 @@ static void z80_run(int cycles) {
     int op;
     s.cycles += cycles;
     while (s.cycles > 0) {
+#ifdef Z80_EXT_IRQ
+        s.irq_line = (z80_u8)(Z80_EXT_IRQ ? 1 : 0);
+#endif
         if (s.events) {
             if (s.irq_line && s.iff1 && !s.ei_delay) { z80_take_irq(zp); continue; }
             if (s.halted) {                                /* burn the rest in HALT NOPs */
+                if (s.ei_delay) { s.ei_delay = 0; s.cycles -= 4; continue; }  /* one NOP first */
                 if (s.irq_line && s.iff1) continue;
-                s.cycles = 0; break;
+                s.cycles -= (s.cycles + 3) & ~3;           /* whole 4-cycle NOPs: ends up to 3 */
+                break;                                     /* past the slice, as the CPU does */
             }
             if (s.ei_delay) {                              /* one op after EI, then look again */
                 s.ei_delay = 0;
