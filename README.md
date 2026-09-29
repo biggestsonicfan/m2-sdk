@@ -214,9 +214,11 @@ START1/2, SERVICE = credit.
   Without that, mid-tone colours (the blue maze) come out white.
 - **Sound:** the sound board's 68000 normally runs the game's own driver, a MIDI synth
   for STF's music and effects that takes nothing raw. So `snd/scsp_passthru.s` replaces
-  it: a 240-byte 68000 program that applies SCSP register and sound RAM writes the i960
+  it: a 304-byte 68000 program that applies SCSP register and sound RAM writes the i960
   sends down the sound UART (`src/m2_scsp.h`; a ping first confirms it is there, so a
-  game's driver never gets them as notes). Pac-Man uploads the eight 32-sample waveforms
+  game's driver never gets them as notes). It sleeps in `STOP` and wakes on the SCSP's
+  MIDI interrupt, so an emulator spends nothing on it between bytes (polling cost MAME
+  ~16% of its host time). Pac-Man uploads the eight 32-sample waveforms
   from the `1m` PROM, loops them on SCSP slots 0-2 and sets each voice's pitch, level and
   waveform from the WSG registers every frame. Checked in MAME against a host synthesis
   of the same register stream (MAME `namco.cpp`'s model): the siren sweeps 392-914 Hz
@@ -227,9 +229,17 @@ START1/2, SERVICE = credit.
 - **In the browser:** `src/pacman_web.c` is Pac-Man without the SHARC boot. A booted SHARC
   keeps MAME emulating its firmware's loop every frame, and Pac-Man gives it no work, so
   leaving it out makes MAME itself ~2.7x faster (native MAME: 60% -> 160% of real time).
-  It runs at full speed in a web (Emscripten) MAME built with the Model 2 driver
-  (`emmake make SUBTARGET=m2 SOURCES=src/mame/sega/model2.cpp`), with `m2_load.lua`,
-  `game.bin` and `scsp_passthru.bin` in `/files` and sfight/schamp/segabill in `/roms`.
+  It also waits for vblank on `sinr` instead of a tight poll (`PAC_IDLE_SINR`): MAME's
+  i960 core charges it 406 cycles for one host `sin()`, so the idle i960 costs MAME ~100x
+  less (native MAME +20%); it needs the i960 FPU, so not for m2emulator. It runs at full
+  speed in a web (Emscripten) MAME built with the Model 2 driver (`emmake make
+  SUBTARGET=m2 SOURCES=src/mame/sega/model2.cpp`), with `m2_load.lua`, `game.bin` and
+  `scsp_passthru.bin` in `/files` and sfight/schamp/segabill in `/roms`. `m2_load.lua`
+  prints MAME's own speed to the log every ~5 s: below 100% the host can't keep up and
+  the sound breaks up. Web MAME's audio backend opened the browser's audio at the
+  device rate (44.1 kHz here) while MAME sends 48 kHz, which kept its buffer full
+  (~0.45 s behind) and dropping samples; the fix is in the MAME fork
+  (`biggestsonicfan/mame` branch `web-audio-latency`, `src/osd/modules/sound/js_sound.js`).
 - **Run on a stock sfight romset:** every build also writes `roms/<game>/game.bin`, and
   `tools/m2_load.lua` (an `-autoboot_script`) copies it over the program ROM region, and
   `snd/scsp_passthru.bin` over the sound program (`$M2_SOUND_BIN`, or
