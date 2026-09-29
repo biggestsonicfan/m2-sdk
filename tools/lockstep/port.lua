@@ -1,11 +1,12 @@
--- lockstep/port.lua: the i960 port under MAME's Model 2 driver (sfight + tools/m2_load.lua).
+-- lockstep/port.lua: the i960 port under MAME's Model 2 driver: sfight with the three EPROMs
+-- swapped (run.sh EPROMS=), or a stock sfight + tools/m2_load.lua (M2_GAME_BIN set).
 -- A write tap on the i960's pac_frames catches every Pac-Man frame (also two in one Model 2
 -- vblank): before frame n runs, frame n-1's RAM (pac_ram = 0x4000-0x4FFF) + pac_spr_xy ->
 -- port.bin, every 60th frame's pac_fb -> port_NNNNN.fb, and frame n's inputs are written
 -- into pac_in0/pac_in1 (the port's own input read has just run). Symbol addresses from
 -- $LS_OUT/port.syms (`i960-elf-nm game.elf`).
 local tools = os.getenv("LS_TOOLS") or "tools/lockstep"
-dofile(tools .. "/../m2_load.lua")
+if os.getenv("M2_GAME_BIN") then dofile(tools .. "/../m2_load.lua") end
 if LS_PORT then return end                       -- the script re-runs after m2_load's reset
 LS_PORT = true
 dofile(tools .. "/inputs.lua")
