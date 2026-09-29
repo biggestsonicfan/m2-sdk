@@ -125,9 +125,9 @@ static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
 #define Z80_EXT_IRQ     pac_irq_line
 #define Z80_EXT_IRQ_VEC pac_vector
 /* every accepted IRQ: the CPU state as it's taken (tools/lockstep compares it with MAME's) */
-static u8  pac_irq_regs[48];
 static u32 pac_irq_count;
-#define Z80_IRQ_HOOK(zp) (__builtin_memcpy(pac_irq_regs, (zp), sizeof *(zp)), pac_irq_count++)
+static void pac_irq_snap(const void *zp);   /* after m2_z80.h: it needs z80_t */
+#define Z80_IRQ_HOOK(zp) pac_irq_snap(zp)
 #define Z80_FETCH(a)  (((a) & 0x7fff) < 0x4000 ? pac_rom[(a) & 0x3fff] : pac_rd(a))
 /* idle skip: the game's main loop spins on its task queue (`ld hl,(nn); ld a,(hl);
  * and a; jp m,loop`, 0x238D in pacman/puckman) until the vblank IRQ queues work; once
@@ -149,7 +149,18 @@ static inline int pac_idle_empty(void) {
         { int n_ = (z80.cycles - 1) / PAC_IDLE_LOOP_CYCLES;  /* passes of 4 ops, 4 M1s each */ \
           z80.cycles -= n_ * PAC_IDLE_LOOP_CYCLES; z80.rr = (z80_u8)(z80.rr + 4 * n_); } } while (0)
 #include "m2_z80.h"
-_Static_assert(sizeof(z80_t) <= sizeof pac_irq_regs, "pac_irq_regs too small");
+/* `used`: only tools/lockstep reads it (from outside), so GCC would drop it and its stores */
+static z80_t pac_irq_regs __attribute__((used));
+_Static_assert(sizeof(z80_t) % 4 == 0, "pac_irq_snap copies whole words");
+/* word by word through a volatile pointer: a plain copy becomes a memcpy call, and this
+ * freestanding build has no memcpy (m2-pacman issue #2) */
+static void pac_irq_snap(const void *zp) {
+    const u32 *s = (const u32 *)zp;
+    volatile u32 *d = (volatile u32 *)&pac_irq_regs;
+    unsigned i;
+    for (i = 0; i < sizeof pac_irq_regs / 4; i++) d[i] = s[i];
+    pac_irq_count++;
+}
 /* PAC_RECOMP names a header from tools/z80recomp.py (e.g. "pacman_recomp.h"): the traced
  * ROM code statically recompiled into z80_run_rc, which then replaces z80_run. */
 #ifdef PAC_RECOMP
