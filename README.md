@@ -168,27 +168,45 @@ out. It has no cocktail flip.
 ```sh
 python3 tools/pacrom.py path/to/pacman.zip    # -> src/pacman_roms.h  (Namco data: git-ignored)
 python3 tools/pacrom.py path/to/puckman.zip   # -> src/puckman_roms.h (for src/puckman.c)
+# optional, recommended: statically recompile the game's code (see "Static recompilation")
+cc -O2 -Isrc -o pactrace tools/pactrace.c && ./pactrace > trace.txt
+python3 tools/z80recomp.py src/pacman_roms.h trace.txt src/pacman_recomp.h
 cmake -G Ninja -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_GAME=pacman   # or puckman
 ninja -C build
 ```
+
+(For Puck Man: build pactrace with `-DPAC_ROMS='"puckman_roms.h"'` and write
+`src/puckman_recomp.h`.)
 
 Without the ROM header it builds a homebrew board test instead (`src/pactest_rom.h`,
 made by `tools/pactest.py`, all original data). Inputs: P1/P2 sticks, COIN1/2,
 START1/2, SERVICE = credit.
 
 - **Speed (MAME, real ROMs):** attract and gameplay hold 100% of real Pac-Man speed
-  (uncapped, ~300% with the SHARC and sound running). The game
-  spends most of each frame in a wait-for-vblank loop (`ld hl,(nn) / ld a,(hl) / and a /
-  jp m`, 0x238D), and the core's `Z80_JP_TAKEN` hook ends the Z80's slice there (idle
-  skip, found by byte pattern at reset). The power-on RAM/ROM test has no such loop and
-  runs at ~65%: 14.5 s from program start to the attract loop, against 9.0 s on the real
-  board (measured in MAME, 1.2 s of it SDK/SHARC/sound setup). When a frame overruns its
-  vblank the next one skips drawing (at most three in a row; gameplay never overruns).
-  The core keeps B-L/A/F out of a memory array (`z80_getr`/`z80_setr` for the few
-  run-time-indexed ops), so GCC can hold them in i960 registers. The panel on the left shows the rate;
-  `-DPAC_BENCH` removes the vblank cap. Pac-Man runs at 60.61 Hz and the Model 2 at
-  57.52 Hz, so about every 19th vblank runs two Pac-Man frames (drawing only the second)
-  and game time matches the real board. Not tried on silicon.
+  (uncapped, ~410% with the SHARC and sound running, recompiled). Boot, from program
+  start to the attract loop, takes 10.4 s against 9.0 s on the real board (1.2 s of it is
+  SDK/SHARC/sound setup); interpreted it is 14.5 s. The game spends most of each frame in
+  a wait-for-vblank loop (`ld hl,(nn) / ld a,(hl) / and a / jp m`, 0x238D), and the
+  core's `Z80_JP_TAKEN` hook ends the Z80's slice there (idle skip, found by byte pattern
+  at reset). When a frame overruns its vblank the next one skips drawing (at most three
+  in a row; gameplay never overruns). The core keeps B-L/A/F out of a memory array
+  (`z80_getr`/`z80_setr` for the few run-time-indexed ops), so GCC can hold them in i960
+  registers. The panel on the left shows the rate; `-DPAC_BENCH` removes the vblank cap.
+  Pac-Man runs at 60.61 Hz and the Model 2 at 57.52 Hz, so about every 19th vblank runs
+  two Pac-Man frames (drawing only the second) and game time matches the real board.
+  Not tried on silicon.
+- **Static recompilation:** `tools/pactrace.c` runs the board on the host (boot, attract,
+  coins, a random stick) and lists every instruction address the Z80 executes (about 4200).
+  `tools/z80recomp.py` turns each into C with its operands and PC as constants, using the
+  core's own inline helpers and cycle counts, in one switch in address order: a case falls
+  through to the next when the PC lands there, anything else goes back to the switch, and
+  an address outside the trace, or a form it does not translate (DAA, EI, HALT, EX, block
+  moves, IXH/IXL: 36 of ~4200), runs through the interpreter. So the trace decides speed,
+  not behaviour: 20000 frames of pseudo-random play (`pac_frame` + the Z80 registers, RAM
+  and sound registers hashed every frame) match the interpreter exactly, for both sets.
+  The generated `src/<set>_recomp.h` is derived from the ROM, so it is git-ignored; the
+  build uses it when present (`-DPAC_NO_RECOMP` to leave it out). It is big: the program
+  ROM goes from ~240 KB to ~1000 KB of the 1 MB, and cc1 needs ~650 MB for ~100 s.
 - **Colours:** a tile-palette write goes through the colour-translation table (row = the
   5-bit channel, pen 0x40, MAME `palette_w`). The STF table `m2_init` builds saturates
   that column, so `pacman.c` rewrites it as a linear ramp before loading its palette.
@@ -235,7 +253,7 @@ lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum
 snd/      scsp_passthru.s/.bin (68000 sound program: the i960 drives the SCSP; `ninja snd`)
 tools/    stfbin2rom.py (split the ROM image), bin2c.py, sharc2h.py (SHARC .exe -> cpres*.h),
           m2_load.lua (boot game.bin + a sound program in MAME),
-          pacrom.py / pactest.py / pachost.c / z80test/ (Pac-Man port)
+          pacrom.py / pactest.py / pachost.c / pactrace.c / z80recomp.py / z80test/ (Pac-Man port)
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```
 
