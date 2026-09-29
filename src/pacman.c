@@ -37,12 +37,17 @@
 #endif
 
 #ifndef PAC_ROMS                       /* src/puckman.c picks the other set */
-#define PAC_ROMS  "pacman_roms.h"
-#define PAC_NAME  "PAC-MAN"
+#define PAC_ROMS   "pacman_roms.h"
+#define PAC_RC_HDR "pacman_recomp.h"
+#define PAC_NAME   "PAC-MAN"
 #endif
 #if __has_include(PAC_ROMS)
 #include PAC_ROMS
 #define PAC_TITLE PAC_NAME
+/* the ROM's traced code statically recompiled (tools/z80recomp.py), if generated */
+#if defined(PAC_RC_HDR) && !defined(PAC_NO_RECOMP) && __has_include(PAC_RC_HDR)
+#define PAC_RECOMP PAC_RC_HDR
+#endif
 #else
 #include "pactest_rom.h"
 #define PAC_TITLE "TEST ROM"

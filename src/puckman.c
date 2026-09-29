@@ -7,5 +7,6 @@
  * Build:  cmake -G Ninja -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_GAME=puckman
  */
 #define PAC_ROMS "puckman_roms.h"
+#define PAC_RC_HDR "puckman_recomp.h"
 #define PAC_NAME "PUCK MAN"
 #include "pacman.c"

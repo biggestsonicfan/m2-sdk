@@ -113,6 +113,14 @@ static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
 static int pac_idle_pc = -1;           /* found by pac_find_idle(); -1 = none */
 #define Z80_JP_TAKEN(t) do { if ((int)(t) == pac_idle_pc) z80.cycles = 0; } while (0)
 #include "m2_z80.h"
+/* PAC_RECOMP names a header from tools/z80recomp.py (e.g. "pacman_recomp.h"): the traced
+ * ROM code statically recompiled into z80_run_rc, which then replaces z80_run. */
+#ifdef PAC_RECOMP
+#include PAC_RECOMP
+#define PAC_Z80_RUN z80_run_rc
+#else
+#define PAC_Z80_RUN z80_run
+#endif
 
 /* ---- decode ---------------------------------------------------------------- */
 /* MAME gfx_layout bit n: byte n/8, mask 0x80 >> (n%8); planes {0,4}: plane 0 is the MSB */
@@ -267,7 +275,7 @@ static u32 pac_frames;                 /* emulated frames so far */
 
 static void pac_frame(int render) {
     pac_frames++;
-    z80_run(PAC_CYCLES_PER_FRAME);
+    PAC_Z80_RUN(PAC_CYCLES_PER_FRAME);
     if (pac_irq_mask) { z80.irq_line = 1; z80.irq_vec = pac_vector; }
 #ifndef PAC_NORENDER
     if (render) pac_render();
