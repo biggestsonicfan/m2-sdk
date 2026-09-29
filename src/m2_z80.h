@@ -115,6 +115,23 @@ Z80_INL void   z80_bus_wr(z80_u16 a, z80_u8 v) { Z80_WR(a, v); }
 Z80_INL z80_u8 z80_bus_in(z80_u16 p)          { return Z80_IN(p); }
 Z80_INL void   z80_bus_out(z80_u16 p, z80_u8 v) { Z80_OUT(p, v); }
 
+/* ---- register by index (B C D E H L F A) --------------------------------------
+ * Only through these switches is r[] indexed at run time, so GCC can keep the eight
+ * registers in i960 registers instead of the array in memory (a load is 4 cycles, a
+ * store 2 in MAME's i960 model). The hot main-page ops use constant indexes instead. */
+Z80_INL z80_u8 z80_getr(z80_t *zp, int i) {
+    switch (i & 7) {
+    case 0: return zB; case 1: return zC; case 2: return zD; case 3: return zE;
+    case 4: return zH; case 5: return zL; case 6: return zF; default: return zA;
+    }
+}
+Z80_INL void z80_setr(z80_t *zp, int i, z80_u8 v) {
+    switch (i & 7) {
+    case 0: zB = v; break; case 1: zC = v; break; case 2: zD = v; break; case 3: zE = v; break;
+    case 4: zH = v; break; case 5: zL = v; break; case 6: zF = v; break; default: zA = v; break;
+    }
+}
+
 /* ---- fetch / stack helpers ------------------------------------------------- */
 Z80_INL z80_u8 z80_imm8(z80_t *zp) { return z80_bus_fetch(z80.pc++); }
 Z80_INL z80_u16 z80_imm16(z80_t *zp) {
@@ -246,10 +263,10 @@ Z80_INL int z80_exec_ed(z80_t *zp) {
     case 0x40: case 0x48: case 0x50: case 0x58: case 0x60: case 0x68: case 0x70: case 0x78:
         v = z80_bus_in(zBC);                                   /* IN r,(C) */
         zF = (z80_u8)((zF & Z80_CF) | z80_szp[v]);
-        if (op != 0x70) z80.r[(op >> 3) & 7] = v;
+        if (op != 0x70) z80_setr(zp, op >> 3, v);
         z80.cycles -= 12; return -1;
     case 0x41: case 0x49: case 0x51: case 0x59: case 0x61: case 0x69: case 0x71: case 0x79:
-        z80_bus_out(zBC, op == 0x71 ? 0 : z80.r[(op >> 3) & 7]); /* OUT (C),r */
+        z80_bus_out(zBC, op == 0x71 ? 0 : z80_getr(zp, op >> 3)); /* OUT (C),r */
         z80.cycles -= 12; return -1;
     case 0x42: case 0x52: case 0x62: case 0x72:
         z80_sbc16(zp, z80_rp(zp, op >> 4, zHL)); z80.cycles -= 15; return -1;
@@ -331,7 +348,7 @@ Z80_INL int z80_exec_ed(z80_t *zp) {
 Z80_INL void z80_exec_cb(z80_t *zp) {
     z80_u8 op = z80_imm8(zp), v;
     int reg = op & 7, b = (op >> 3) & 7;
-    v = (reg == 6) ? z80_bus_rd(zHL) : z80.r[reg];
+    v = (reg == 6) ? z80_bus_rd(zHL) : z80_getr(zp, reg);
     switch (op >> 6) {
     case 0: v = z80_rot(zp, op, v); break;
     case 1: z80_bit(zp, b, v, reg == 6 ? (z80_u8)(zHL >> 8) : v);
@@ -340,7 +357,7 @@ Z80_INL void z80_exec_cb(z80_t *zp) {
     default: v = (z80_u8)(v | (1u << b)); break;
     }
     if (reg == 6) { z80_bus_wr(zHL, v); z80.cycles -= 15; }
-    else          { z80.r[reg] = v; z80.cycles -= 8; }
+    else          { z80_setr(zp, reg, v); z80.cycles -= 8; }
 }
 
 /* ---- DD/FD page: `xy` is IX or IY ------------------------------------------ */
@@ -386,23 +403,23 @@ Z80_INL int z80_exec_xy(z80_t *zp, z80_u16 *xy) {
         default: v = (z80_u8)(v | (1u << b)); break;
         }
         z80_bus_wr(a, v);
-        if (reg != 6) z80.r[reg] = v;                     /* undocumented copy to reg */
+        if (reg != 6) z80_setr(zp, reg, v);               /* undocumented copy to reg */
         z80.cycles -= 23; return -1;
     }
     default: break;
     }
     if (op >= 0x40 && op < 0x80 && op != 0x76) {          /* LD r,r' with IXH/IXL/(IX+d) */
         int dst = (op >> 3) & 7, src = op & 7;
-        if (src == 6) { v = z80_bus_rd(XD()); z80.r[dst] = v; z80.cycles -= 19; return -1; }
-        if (dst == 6) { a = XD(); z80_bus_wr(a, z80.r[src]); z80.cycles -= 19; return -1; }
-        v = (src == 4) ? XH : (src == 5) ? XL : z80.r[src];
-        if (dst == 4) SET_XH(v); else if (dst == 5) SET_XL(v); else z80.r[dst] = v;
+        if (src == 6) { v = z80_bus_rd(XD()); z80_setr(zp, dst, v); z80.cycles -= 19; return -1; }
+        if (dst == 6) { a = XD(); z80_bus_wr(a, z80_getr(zp, src)); z80.cycles -= 19; return -1; }
+        v = (src == 4) ? XH : (src == 5) ? XL : z80_getr(zp, src);
+        if (dst == 4) SET_XH(v); else if (dst == 5) SET_XL(v); else z80_setr(zp, dst, v);
         z80.cycles -= 8; return -1;
     }
     if (op >= 0x80 && op < 0xc0) {                         /* ALU A,IXH/IXL/(IX+d) */
         int src = op & 7;
         if (src == 6) { z80_alu(zp, op >> 3, z80_bus_rd(XD())); z80.cycles -= 19; return -1; }
-        v = (src == 4) ? XH : (src == 5) ? XL : z80.r[src];
+        v = (src == 4) ? XH : (src == 5) ? XL : z80_getr(zp, src);
         z80_alu(zp, op >> 3, v); z80.cycles -= 8; return -1;
     }
 #undef XH
@@ -465,14 +482,15 @@ Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
     case 0x3b: z80.sp--; z80.cycles -= 6; return -1;
     case 0x09: case 0x19: case 0x29: case 0x39:
         a = z80_add16(zp, zHL, z80_rp(zp, op >> 4, zHL)); zSET_HL(a); z80.cycles -= 11; return -1;
-    case 0x04: case 0x0c: case 0x14: case 0x1c: case 0x24: case 0x2c: case 0x3c:
-        z80.r[(op >> 3) & 7] = z80_inc8(zp, z80.r[(op >> 3) & 7]); z80.cycles -= 4; return -1;
-    case 0x05: case 0x0d: case 0x15: case 0x1d: case 0x25: case 0x2d: case 0x3d:
-        z80.r[(op >> 3) & 7] = z80_dec8(zp, z80.r[(op >> 3) & 7]); z80.cycles -= 4; return -1;
+#define Z80_INCDEC(o) \
+    case (o):     z80.r[((o) >> 3) & 7] = z80_inc8(zp, z80.r[((o) >> 3) & 7]); z80.cycles -= 4; return -1; \
+    case (o) + 1: z80.r[((o) >> 3) & 7] = z80_dec8(zp, z80.r[((o) >> 3) & 7]); z80.cycles -= 4; return -1; \
+    case (o) + 2: z80.r[((o) >> 3) & 7] = z80_imm8(zp); z80.cycles -= 7; return -1;
+    Z80_INCDEC(0x04) Z80_INCDEC(0x0c) Z80_INCDEC(0x14) Z80_INCDEC(0x1c)
+    Z80_INCDEC(0x24) Z80_INCDEC(0x2c) Z80_INCDEC(0x3c)
+#undef Z80_INCDEC
     case 0x34: z80_bus_wr(zHL, z80_inc8(zp, z80_bus_rd(zHL))); z80.cycles -= 11; return -1;
     case 0x35: z80_bus_wr(zHL, z80_dec8(zp, z80_bus_rd(zHL))); z80.cycles -= 11; return -1;
-    case 0x06: case 0x0e: case 0x16: case 0x1e: case 0x26: case 0x2e: case 0x3e:
-        z80.r[(op >> 3) & 7] = z80_imm8(zp); z80.cycles -= 7; return -1;
     case 0x36: z80_bus_wr(zHL, z80_imm8(zp)); z80.cycles -= 10; return -1;
     case 0x07: zA = (z80_u8)((zA << 1) | (zA >> 7));
         zF = (z80_u8)((zF & (Z80_SF | Z80_ZF | Z80_PF)) | (zA & (Z80_XF | Z80_YF | Z80_CF)));
@@ -502,9 +520,13 @@ Z80_INL int z80_exec_main(z80_t *zp, z80_u8 op) {
     case 0x3f: zF = (z80_u8)(((zF & (Z80_SF | Z80_ZF | Z80_PF | Z80_CF)) | ((zF & Z80_CF) << 4)
                               | (zA & (Z80_XF | Z80_YF))) ^ Z80_CF);
         z80.cycles -= 4; return -1;
-    case 0x08: { int i; for (i = 6; i < 8; i++) { v = z80.r[i]; z80.r[i] = z80.alt[i]; z80.alt[i] = v; } }
+    case 0x08: v = zF; zF = z80.alt[Z80_F]; z80.alt[Z80_F] = v;
+        v = zA; zA = z80.alt[Z80_A]; z80.alt[Z80_A] = v;
         z80.cycles -= 4; return -1;                           /* EX AF,AF' */
-    case 0xd9: { int i; for (i = 0; i < 6; i++) { v = z80.r[i]; z80.r[i] = z80.alt[i]; z80.alt[i] = v; } }
+    case 0xd9:
+#define Z80_SWAP(i) v = z80.r[i]; z80.r[i] = z80.alt[i]; z80.alt[i] = v;
+        Z80_SWAP(Z80_B) Z80_SWAP(Z80_C) Z80_SWAP(Z80_D) Z80_SWAP(Z80_E) Z80_SWAP(Z80_H) Z80_SWAP(Z80_L)
+#undef Z80_SWAP
         z80.cycles -= 4; return -1;                           /* EXX */
     case 0xeb: v = zD; zD = zH; zH = v; v = zE; zE = zL; zL = v; z80.cycles -= 4; return -1;
     case 0xe3: a = z80_rd16(zp, z80.sp); z80_wr16(zp, z80.sp, zHL); zSET_HL(a); z80.cycles -= 19; return -1;

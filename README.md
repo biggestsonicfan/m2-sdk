@@ -177,12 +177,15 @@ made by `tools/pactest.py`, all original data). Inputs: P1/P2 sticks, COIN1/2,
 START1/2, SERVICE = credit.
 
 - **Speed (MAME, real ROMs):** attract and gameplay hold 100% of real Pac-Man speed
-  (uncapped, ~195% with the SHARC and sound running). The game
+  (uncapped, ~300% with the SHARC and sound running). The game
   spends most of each frame in a wait-for-vblank loop (`ld hl,(nn) / ld a,(hl) / and a /
   jp m`, 0x238D), and the core's `Z80_JP_TAKEN` hook ends the Z80's slice there (idle
   skip, found by byte pattern at reset). The power-on RAM/ROM test has no such loop and
-  runs at ~51%, so boot takes ~15 s instead of ~8 s. When a frame overruns its vblank,
-  the next one skips drawing (never two in a row). The panel on the left shows the rate;
+  runs at ~65%: 14.5 s from program start to the attract loop, against 9.0 s on the real
+  board (measured in MAME, 1.2 s of it SDK/SHARC/sound setup). When a frame overruns its
+  vblank the next one skips drawing (at most three in a row; gameplay never overruns).
+  The core keeps B-L/A/F out of a memory array (`z80_getr`/`z80_setr` for the few
+  run-time-indexed ops), so GCC can hold them in i960 registers. The panel on the left shows the rate;
   `-DPAC_BENCH` removes the vblank cap. Pac-Man runs at 60.61 Hz and the Model 2 at
   57.52 Hz, so about every 19th vblank runs two Pac-Man frames (drawing only the second)
   and game time matches the real board. Not tried on silicon.
