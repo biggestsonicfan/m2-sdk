@@ -136,7 +136,8 @@ static void pac_sound_init(void) {
         pac_snd_sent[v][0] = 0; pac_snd_sent[v][1] = 255; pac_snd_sent[v][2] = (u16)PAC_SND_WAVES;
     }
     m2_scsp_w(M2_SCSP_SLOT(0) + 0x00, 0x1820);      /* KYONEX: key the three slots on */
-    m2_scsp_flush();
+    m2_scsp_pump();   /* ~1950 bytes queued: the vblank waits send them (~0.6 s) while the
+                       * game boots; its first sound comes much later, after a coin */
 }
 
 static void pac_sound_update(void) {
