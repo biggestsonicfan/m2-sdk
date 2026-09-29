@@ -61,3 +61,16 @@ if sdata and srgn then
 end
 
 if changed then manager.machine:soft_reset() end
+
+-- report MAME's own speed now and then (the player's log shows it): below 100% the host
+-- can't keep up and the sound breaks up. Registered once (the script re-runs after reset).
+if not M2_LOAD_SPEED then
+  M2_LOAD_SPEED = true
+  local frames = 0
+  emu.register_frame_done(function()
+    frames = frames + 1
+    if frames % 300 == 0 then
+      print(string.format("m2_load: MAME speed %.0f%%", manager.machine.video.speed_percent * 100))
+    end
+  end)
+end

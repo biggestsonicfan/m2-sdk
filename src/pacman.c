@@ -161,6 +161,18 @@ static void pac_sound_update(void) {
     m2_scsp_pump();
 }
 
+#ifdef PAC_IDLE_SINR
+/* Idle cheaply under MAME: its i960 core emulates each instruction at about the same host
+ * cost, but charges `sinr` 406 cycles (MAME cpu/i960/i960.cpp) while computing it with one
+ * host sin(). Waiting for vblank on sinr instead of a tight poll cuts the idle i960 work
+ * MAME does ~100x, which is most of what a browser build spends. Needs the i960KB FPU:
+ * fine on MAME and a real Model 2B, an invalid opcode on m2emulator (no FPU). */
+static inline void pac_idle(void) {
+    u32 x = 0;                         /* sin(+0.0) = +0.0: the value never changes */
+    __asm__ volatile ("sinr %0,%0" : "+r"(x));
+}
+#endif
+
 /* copy the changed cells of pac_fb into their char blocks */
 static void pac_blit(void) {
     int i, y;
@@ -231,7 +243,12 @@ int main(void) {
         skipped = render ? 0 : skipped + 1;
         late = frameVBL != last;
 #ifndef PAC_BENCH                      /* -DPAC_BENCH: run flat out, SPEED shows the headroom */
-        while (frameVBL == last) m2_scsp_pump();   /* one vblank's worth per vblank; feed the UART */
+        while (frameVBL == last) {     /* one vblank's worth per vblank; feed the UART */
+            m2_scsp_pump();
+#ifdef PAC_IDLE_SINR
+            pac_idle();
+#endif
+        }
 #endif
         last = frameVBL;
         if (last - t0 >= 60) {         /* speed = emulated frames vs real Pac-Man time */
