@@ -81,7 +81,9 @@ static inline __attribute__((always_inline)) u8 pac_rd(u16 a) {
     }
 }
 
-static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
+/* everything but work RAM: out of line, so the many write sites (and the statically
+ * recompiled code) stay small; video/colour RAM marks dirty cells, I/O latches */
+static __attribute__((noinline)) void pac_wr_slow(u16 a, u8 v) {
     a &= 0x7fff;
     if (a < 0x4000) return;
     if (a < 0x5000) {
@@ -100,6 +102,11 @@ static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
     if ((a & 0xffc7) == 0x5000) pac_irq_mask = v & 1;   /* 0x5000 latch bit 0: IRQ enable */
     if ((a & 0xffc7) == 0x5001) pac_snd_on = v & 1;     /* 0x5001 latch bit 1: sound enable */
     /* 0x5003 flip, 0x50C0 watchdog: ignored */
+}
+
+static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
+    if ((a & 0x7c00) == 0x4c00) { pac_ram[a & 0x0fff] = v; return; }   /* work RAM + stack */
+    pac_wr_slow(a, v);
 }
 
 #define Z80_RD(a)     pac_rd(a)
