@@ -70,10 +70,14 @@ add_custom_target(rom ALL
             --input game.bin --output "${CMAKE_SOURCE_DIR}/roms"
     # the flat image too, per game (not clobbered by other builds): tools/m2_load.lua
     # boots it on a stock sfight romset, e.g. in Pinboard's web MAME
+    # the sound program EPROM too (snd/scsp_passthru.bin: the i960 drives the SCSP), so
+    # roms/ holds a complete standalone set: sfight + these three files
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/snd2rom.py"
+            "${CMAKE_SOURCE_DIR}/snd/scsp_passthru.bin" "${CMAKE_SOURCE_DIR}/roms"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}"
     COMMAND ${CMAKE_COMMAND} -E copy game.bin "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}/game.bin"
     COMMAND ${CMAKE_COMMAND} -E echo
-            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16  roms/${M2_GAME}/game.bin"
+            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16  roms/epr-19021.31 (sound)  roms/${M2_GAME}/game.bin"
     DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)
