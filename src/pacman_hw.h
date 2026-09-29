@@ -11,11 +11,12 @@
  * Needs, before including: u8/u16/u32 types and the ROM data (see tools/pacrom.py):
  *   pac_rom[0x4000]    6e 6f 6h 6j program       pac_tiles[0x1000]   5e char gfx
  *   pac_sprites[0x1000] 5f sprite gfx             pac_prom_pal[32]    7f palette PROM
- *   pac_prom_lut[256]  4a colour lookup PROM
+ *   pac_prom_lut[256]  4a colour lookup PROM      pac_prom_snd[256]   1m WSG waveforms
  *
  * References are MAME namco/pacman.cpp (map, inputs) and namco/pacman_v.cpp (video):
  * the tilemap scan (pacman_scan_rows), sprite placement and the gfx layouts below.
- * Not emulated: sound (Namco WSG), flip screen / cocktail, the watchdog.
+ * Sound: the WSG registers are captured in pac_snd[] for the host to play (src/pacman.c
+ * sends them to the SCSP). Not emulated: flip screen / cocktail, the watchdog.
  */
 #ifndef PACMAN_HW_H
 #define PACMAN_HW_H
@@ -33,6 +34,8 @@ static u8  pac_spr_xy[16];             /* 0x5060-0x506F sprite coordinates (writ
 static u8  pac_irq_mask, pac_vector;
 static u8  pac_in0 = 0xff, pac_in1 = 0xff;   /* active-low, set by the host each frame */
 static u8  pac_dsw1 = 0xc9;            /* MAME defaults: 1 coin 1 credit, 3 lives, bonus 10000 */
+static u8  pac_snd[32];                /* WSG registers 0x5040-0x505F (4 bits each) */
+static u8  pac_snd_on;                 /* 0x5001 latch bit: sound enable */
 
 /* ---- video state ----------------------------------------------------------- */
 static u32 pac_fb[PAC_CELLS][8];       /* portrait screen, Model 2 char-RAM format */
@@ -93,8 +96,10 @@ static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
         return;
     }
     if (a >= 0x5060 && a < 0x5070) { pac_spr_xy[a & 15] = v; return; }
+    if ((a & 0xffe0) == 0x5040) { pac_snd[a & 31] = v & 15; return; }   /* Namco WSG */
     if ((a & 0xffc7) == 0x5000) pac_irq_mask = v & 1;   /* 0x5000 latch bit 0: IRQ enable */
-    /* 0x5001 sound enable, 0x5003 flip, 0x5040-0x505F WSG, 0x50C0 watchdog: ignored */
+    if ((a & 0xffc7) == 0x5001) pac_snd_on = v & 1;     /* 0x5001 latch bit 1: sound enable */
+    /* 0x5003 flip, 0x50C0 watchdog: ignored */
 }
 
 #define Z80_RD(a)     pac_rd(a)

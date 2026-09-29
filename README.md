@@ -130,6 +130,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
 | `m2_z80.h` | A Z80 interpreter (passes zexdoc) for emulating Z80 boards on the i960; bus hooks are macros you define. Portable C — also builds on the host. Used by `src/pacman.c`. |
+| `m2_scsp.h` | **The i960 drives the SCSP.** With `snd/scsp_passthru.bin` as the sound board's 68000 program, bytes sent down the sound UART become SCSP register and sound RAM writes: `m2_scsp_probe`, `m2_scsp_w`, `m2_scsp_ram_w`, `m2_scsp_pitch_fx`, a non-blocking queue (`m2_scsp_pump`). Used by `src/pacman.c`. |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
 `i_table.s`, `i_handle.s` (assembled automatically by the build).
@@ -162,7 +163,7 @@ firmware (`src/cpres1.h`/`cpres2.h`, assembled from stf-sharc with `tools/sharc2
 [`docs/firmware-extraction.md`](docs/firmware-extraction.md)) and commits an empty GEO
 frame each frame, so the real geometrizer (`M2_HLE_GEO_OFF`) runs alongside it; Pac-Man
 itself draws no polygons. `-DPAC_NO_SHARC` (or missing firmware headers) leaves the SHARC
-out. It has no sound (Namco WSG) and no cocktail flip.
+out. It has no cocktail flip.
 
 ```sh
 python3 tools/pacrom.py path/to/pacman.zip    # -> src/pacman_roms.h  (Namco data: git-ignored)
@@ -175,28 +176,43 @@ Without the ROM header it builds a homebrew board test instead (`src/pactest_rom
 made by `tools/pactest.py`, all original data). Inputs: P1/P2 sticks, COIN1/2,
 START1/2, SERVICE = credit.
 
-- **Speed (MAME, real ROMs):** attract and gameplay hold 100% (uncapped, ~220%). The game
+- **Speed (MAME, real ROMs):** attract and gameplay hold 100% of real Pac-Man speed
+  (uncapped, ~195% with the SHARC and sound running). The game
   spends most of each frame in a wait-for-vblank loop (`ld hl,(nn) / ld a,(hl) / and a /
   jp m`, 0x238D), and the core's `Z80_JP_TAKEN` hook ends the Z80's slice there (idle
   skip, found by byte pattern at reset). The power-on RAM/ROM test has no such loop and
   runs at ~51%, so boot takes ~15 s instead of ~8 s. When a frame overruns its vblank,
   the next one skips drawing (never two in a row). The panel on the left shows the rate;
-  `-DPAC_BENCH` removes the vblank cap. One Pac-Man frame runs per Model 2 vblank, so
-  game time follows the Model 2 refresh, not Pac-Man's 60.6 Hz. Not tried on silicon.
+  `-DPAC_BENCH` removes the vblank cap. Pac-Man runs at 60.61 Hz and the Model 2 at
+  57.52 Hz, so about every 19th vblank runs two Pac-Man frames (drawing only the second)
+  and game time matches the real board. Not tried on silicon.
 - **Colours:** a tile-palette write goes through the colour-translation table (row = the
   5-bit channel, pen 0x40, MAME `palette_w`). The STF table `m2_init` builds saturates
   that column, so `pacman.c` rewrites it as a linear ramp before loading its palette.
   Without that, mid-tone colours (the blue maze) come out white.
+- **Sound:** the sound board's 68000 normally runs the game's own driver, a MIDI synth
+  for STF's music and effects that takes nothing raw. So `snd/scsp_passthru.s` replaces
+  it: a 240-byte 68000 program that applies SCSP register and sound RAM writes the i960
+  sends down the sound UART (`src/m2_scsp.h`; a ping first confirms it is there, so a
+  game's driver never gets them as notes). Pac-Man uploads the eight 32-sample waveforms
+  from the `1m` PROM, loops them on SCSP slots 0-2 and sets each voice's pitch, level and
+  waveform from the WSG registers every frame. Checked in MAME against a host synthesis
+  of the same register stream (MAME `namco.cpp`'s model): the siren sweeps 392-914 Hz
+  against 400-913 Hz with the same 0.417 s period, and the intro tune's note content
+  correlates 0.996. Without the passthrough program the game runs silent ("NO SOUND").
 - **Tests:** `tools/z80test/z80test.c` runs zexdoc (67/67 pass) against the core on the
   host, and `tools/pachost.c` runs the whole board on the host and writes a PPM.
 - **Run on a stock sfight romset:** every build also writes `roms/<game>/game.bin`, and
-  `tools/m2_load.lua` (an `-autoboot_script`) copies it over the program ROM region and
-  resets. That's how Pinboard's web MAME launches it.
-- **Why interpret?** The Model 2 has an i960, and its sound board a 68000 and the SCSP, so
-  in principle a guest board built on those chips could hand its code to the matching
-  part instead of interpreting it (not built yet). Pac-Man's Z80 has no match here, so
-  it goes through the interpreter; the machine layer (`pacman_hw.h`) only sees the bus
-  hooks, not how the CPU runs.
+  `tools/m2_load.lua` (an `-autoboot_script`) copies it over the program ROM region, and
+  `snd/scsp_passthru.bin` over the sound program (`$M2_SOUND_BIN`, or
+  `/files/scsp_passthru.bin`), then resets. That's how Pinboard's web MAME launches it:
+  `M2_GAME_BIN=roms/pacman/game.bin M2_SOUND_BIN=snd/scsp_passthru.bin mame sfight
+  -autoboot_script tools/m2_load.lua`.
+- **Why interpret?** The Model 2 has an i960, and its sound board a 68000 and the SCSP.
+  The SCSP passthrough above is the first piece of handing a guest's work to a matching
+  Model 2 part; a guest CPU matching the i960 or 68000 is not built yet. Pac-Man's Z80 has
+  no match here, so it goes through the interpreter; the machine layer (`pacman_hw.h`)
+  only sees the bus hooks, not how the CPU runs.
 
 ## Toolchain
 
@@ -213,8 +229,9 @@ i.e. `C:\msys64\clang64\bin`. That directory **must be on `PATH`** — otherwise
 src/      SDK headers (m2*.h) + i960 boot/IRQ asm (*.s) + your game .c
           (+ your extracted cpres*.h firmware blobs — git-ignored)
 lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum)
+snd/      scsp_passthru.s/.bin (68000 sound program: the i960 drives the SCSP; `ninja snd`)
 tools/    stfbin2rom.py (split the ROM image), bin2c.py, sharc2h.py (SHARC .exe -> cpres*.h),
-          m2_load.lua (boot game.bin in MAME),
+          m2_load.lua (boot game.bin + a sound program in MAME),
           pacrom.py / pactest.py / pachost.c / z80test/ (Pac-Man port)
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```

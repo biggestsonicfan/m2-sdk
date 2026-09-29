@@ -147,6 +147,7 @@ def program(texts, dl_items):
     a.b(0xed, 0x5e)                                 # im 2
     a.b(0xaf, 0xd3, 0x00)                           # xor a ; out (0),a  -> vector 0x00
     a.b(0x3e, 0x01); a.op16(LD_NN_A, 0x5000)        # IRQ enable
+    a.op16(LD_NN_A, 0x5001)                         # sound enable
     a.b(EI)
     # busy idle loop, never HALTs (like the real game's task loop), with a game-like mix of
     # IX-indexed, CB, 16-bit, stack and call work, so SPEED is a stress figure
@@ -176,6 +177,15 @@ def program(texts, dl_items):
         a.b(0xcb, 0x40 | (bit << 3)); a.rel(JRNZ, 'j%d' % bit)   # bit n,b
         a.op16(LD_HL, addr); a.b(op)                             # inc/dec (hl)
         a.label('j%d' % bit)
+    # a tone on WSG voice 0 while the stick is held: waveform 0, pitch from the x register
+    a.b(0x78, 0xe6, 0x0f, 0xfe, 0x0f)               # ld a,b ; and 0x0f ; cp 0x0f
+    a.b(0x3e, 0x00); a.rel(JRZ, 'quiet')            # ld a,0 ; jr z (nothing held)
+    a.b(0x3e, 0x0c)                                 # ld a,12 (volume)
+    a.label('quiet'); a.op16(LD_NN_A, 0x5055)       # voice 0 volume
+    a.b(0xaf); a.op16(LD_NN_A, 0x5045)              # waveform 0
+    a.op16(LD_A_NN, 0x4c00); a.b(0xe6, 0x0f); a.op16(LD_NN_A, 0x5052)   # freq nibble 2 = x & 15
+    a.op16(LD_A_NN, 0x4c00); a.b(0x0f, 0x0f, 0x0f, 0x0f, 0xe6, 0x0f)    # (x >> 4) & 15
+    a.op16(LD_NN_A, 0x5053)                         # freq nibble 3
     # sprite 0: the player
     a.op16(LD_A_NN, 0x4c00); a.op16(LD_NN_A, 0x5060)
     a.op16(LD_A_NN, 0x4c01); a.op16(LD_NN_A, 0x5061)
@@ -255,6 +265,7 @@ def main():
     text(3, 8, 'RUN TOOLS/PACROM.PY', 7)
     text(3, 9, 'ON PACMAN.ZIP', 7)
     text(3, 13, 'STICK MOVES PAC-MAN', 1)
+    text(3, 14, 'AND PLAYS A TONE', 1)
     text(3, 28, 'FRAME', 1); texts['frame'] = (9, 28)
     text(3, 30, 'IN0', 1);   texts['in0'] = (9, 30)
     text(13, 30, 'IN1', 1);  texts['in1'] = (19, 30)
@@ -262,7 +273,17 @@ def main():
     text(6, 35, '2026 HOMEBREW', 5)
 
     rom = program(texts, items)
-    write_header(out, {'rom': rom, 'tiles': tiles, 'sprites': sprites, 'pal': pal, 'lut': lut},
+    # 1m waveform PROM: 8 waves x 32 4-bit samples (sine, square, saw, triangle, ...)
+    import math
+    snd = []
+    for w in range(8):
+        for i in range(32):
+            ph = i / 32.0
+            v = [7.5 + 7.5 * math.sin(2 * math.pi * ph), 15 if i < 16 else 0, i / 2.0,
+                 (i if i < 16 else 31 - i), 15 if i < 8 else 0, 7.5 + 7.5 * math.sin(4 * math.pi * ph),
+                 15 if (i // 2) % 2 else 0, 7.5 + 7.5 * math.sin(2 * math.pi * ph) ** 3][w]
+            snd.append(int(round(v)) & 15)
+    write_header(out, {'rom': rom, 'tiles': tiles, 'sprites': sprites, 'pal': pal, 'lut': lut, 'snd': snd},
                  'nothing (original test program)', 'Safe to commit: no Namco data.')
     print(out)
 
