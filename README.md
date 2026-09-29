@@ -157,8 +157,12 @@ MAME's `pacman` driver, ported to the i960: the Z80 is interpreted by `m2_z80.h`
 `src/pacman_hw.h` is the rest of the board (memory map, IM 2 vblank IRQ, inputs, the
 tilemap + 8 sprites, both PROMs). The 224x288 portrait screen sits cell-aligned on the
 System 24 tile plane (`m2_tilefb.h`), and each frame only the changed cells are copied
-to char RAM. It uses no polygons, so it runs the same with MAME's HLE geometry and with
-`M2_HLE_GEO_OFF` (real SHARC). It has no sound (Namco WSG) and no cocktail flip.
+to char RAM. Like any sfight-based program it boots the SHARC with Sonic the Fighters'
+firmware (`src/cpres1.h`/`cpres2.h`, assembled from stf-sharc with `tools/sharc2h.py`, see
+[`docs/firmware-extraction.md`](docs/firmware-extraction.md)) and commits an empty GEO
+frame each frame, so the real geometrizer (`M2_HLE_GEO_OFF`) runs alongside it; Pac-Man
+itself draws no polygons. `-DPAC_NO_SHARC` (or missing firmware headers) leaves the SHARC
+out. It has no sound (Namco WSG) and no cocktail flip.
 
 ```sh
 python3 tools/pacrom.py path/to/pacman.zip    # -> src/pacman_roms.h  (Namco data: git-ignored)
@@ -209,7 +213,8 @@ i.e. `C:\msys64\clang64\bin`. That directory **must be on `PATH`** — otherwise
 src/      SDK headers (m2*.h) + i960 boot/IRQ asm (*.s) + your game .c
           (+ your extracted cpres*.h firmware blobs — git-ignored)
 lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum)
-tools/    stfbin2rom.py (split the ROM image), bin2c.py, m2_load.lua (boot game.bin in MAME),
+tools/    stfbin2rom.py (split the ROM image), bin2c.py, sharc2h.py (SHARC .exe -> cpres*.h),
+          m2_load.lua (boot game.bin in MAME),
           pacrom.py / pactest.py / pachost.c / z80test/ (Pac-Man port)
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```

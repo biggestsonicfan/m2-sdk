@@ -21,6 +21,17 @@
 #include "m2.h"
 #include "m2_tilefb.h"
 
+/* Boot the SHARC like any sfight-based game: the COP (cpres1) and GEO (cpres2) firmware,
+ * i.e. Sonic the Fighters' SHARC programs (src/cpres*.h: tools/sharc2h.py from the
+ * stf-sharc reassembly, or a ROM extract — docs/firmware-extraction.md). Pac-Man draws
+ * nothing through it; each frame just commits an empty GEO display list, so the real
+ * geometrizer (MAME M2_HLE_GEO_OFF, silicon) runs its frame loop alongside the game.
+ * -DPAC_NO_SHARC, or no firmware headers, builds without it. */
+#if !defined(PAC_NO_SHARC) && __has_include("cpres1.h") && __has_include("cpres2.h")
+#define PAC_SHARC 1
+#include "m2_obj.h"                    /* m2_silicon_boot, m2_frame_begin/commit/end */
+#endif
+
 #ifndef PAC_ROMS                       /* src/puckman.c picks the other set */
 #define PAC_ROMS  "pacman_roms.h"
 #define PAC_NAME  "PAC-MAN"
@@ -99,7 +110,11 @@ int main(void) {
     char buf[8];
 
     m2_init();
-    pac_linear_tilepal();
+#ifdef PAC_SHARC
+    m2_silicon_boot();                 /* SHARC firmware upload + colour pipeline + GEO seed */
+    for (i = 0; i < 8; i++) { m2_frame_begin(); m2_frame_end(); }   /* prime the GEO */
+#endif
+    pac_linear_tilepal();              /* after m2_silicon_boot: m2_color_init rebuilds colorxlat */
     tfb_init();
     pac_reset();
     for (i = 0; i < 16; i++) {         /* Pac-Man palette -> tile palette (every FB bank) */
@@ -111,6 +126,9 @@ int main(void) {
 
     tfb_text(8, 64, PAC_TITLE, (u8)ink, -1);
     tfb_text(8, 80, "Z80 ON I960", (u8)ink, -1);
+#ifdef PAC_SHARC
+    tfb_text(8, 96, "STF SHARC", (u8)ink, -1);
+#endif
     tfb_text(8, 112, "SPEED", (u8)ink, -1);
 
     last = t0 = frameVBL;
@@ -119,6 +137,10 @@ int main(void) {
          * in a row), so a busy Z80 keeps the game at full speed */
         int render = !(late && !skipped);
         pac_read_inputs();
+#ifdef PAC_SHARC
+        m2_frame_begin();              /* an empty GEO frame: keeps the SHARC's frame loop going */
+        m2_frame_commit();
+#endif
         pac_frame(render);
         if (render) pac_blit();
         skipped = !render;
