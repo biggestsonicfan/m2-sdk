@@ -37,6 +37,7 @@ static u8  pac_in0 = 0xff, pac_in1 = 0xff;   /* active-low, set by the host each
 static u8  pac_dsw1 = 0xc9;            /* MAME defaults: 1 coin 1 credit, 3 lives, bonus 10000 */
 static u8  pac_snd[32];                /* WSG registers 0x5040-0x505F (4 bits each) */
 static u8  pac_snd_on;                 /* 0x5001 latch bit: sound enable */
+static u8  pac_latch;                  /* 0x5000-0x5007 74LS259 outputs, bit n = 0x500n (lockstep) */
 
 /* ---- video state ----------------------------------------------------------- */
 static u32 pac_fb[PAC_CELLS][8];       /* portrait screen, Model 2 char-RAM format */
@@ -99,6 +100,8 @@ static __attribute__((noinline)) void pac_wr_slow(u16 a, u8 v) {
     }
     if (a >= 0x5060 && a < 0x5070) { pac_spr_xy[a & 15] = v; return; }
     if ((a & 0xffe0) == 0x5040) { pac_snd[a & 31] = v & 15; return; }   /* Namco WSG */
+    if ((a & 0xffc0) == 0x5000)                         /* the latch: IRQ, sound, flip, lamps, coins */
+        pac_latch = (u8)((pac_latch & ~(1u << (a & 7))) | ((v & 1u) << (a & 7)));
     if ((a & 0xffc7) == 0x5000) {                       /* 0x5000 latch bit 0: IRQ enable */
         pac_irq_mask = v & 1;
         if (!pac_irq_mask) pac_irq_line = 0;            /* MAME pacman irq_mask_w: CLEAR_LINE */
@@ -121,6 +124,10 @@ static inline __attribute__((always_inline)) void pac_wr(u16 a, u8 v) {
  * whatever OUT (0) last wrote, read at acknowledge (pacman_state::interrupt_vector_r) */
 #define Z80_EXT_IRQ     pac_irq_line
 #define Z80_EXT_IRQ_VEC pac_vector
+/* every accepted IRQ: the CPU state as it's taken (tools/lockstep compares it with MAME's) */
+static u8  pac_irq_regs[48];
+static u32 pac_irq_count;
+#define Z80_IRQ_HOOK(zp) (__builtin_memcpy(pac_irq_regs, (zp), sizeof *(zp)), pac_irq_count++)
 #define Z80_FETCH(a)  (((a) & 0x7fff) < 0x4000 ? pac_rom[(a) & 0x3fff] : pac_rd(a))
 /* idle skip: the game's main loop spins on its task queue (`ld hl,(nn); ld a,(hl);
  * and a; jp m,loop`, 0x238D in pacman/puckman) until the vblank IRQ queues work; once
@@ -139,8 +146,10 @@ static inline int pac_idle_empty(void) {
 }
 #define Z80_JP_TAKEN(t) do { if ((int)(t) == pac_idle_pc && z80.cycles > PAC_IDLE_LOOP_CYCLES \
         && pac_idle_empty()) \
-        z80.cycles -= (z80.cycles - 1) / PAC_IDLE_LOOP_CYCLES * PAC_IDLE_LOOP_CYCLES; } while (0)
+        { int n_ = (z80.cycles - 1) / PAC_IDLE_LOOP_CYCLES;  /* passes of 4 ops, 4 M1s each */ \
+          z80.cycles -= n_ * PAC_IDLE_LOOP_CYCLES; z80.rr = (z80_u8)(z80.rr + 4 * n_); } } while (0)
 #include "m2_z80.h"
+_Static_assert(sizeof(z80_t) <= sizeof pac_irq_regs, "pac_irq_regs too small");
 /* PAC_RECOMP names a header from tools/z80recomp.py (e.g. "pacman_recomp.h"): the traced
  * ROM code statically recompiled into z80_run_rc, which then replaces z80_run. */
 #ifdef PAC_RECOMP
@@ -223,7 +232,7 @@ static void pac_find_idle(void) {
 static void pac_reset(void) {
     pac_video_init();
     pac_find_idle();
-    pac_irq_mask = 0; pac_vector = 0; pac_irq_line = 0;
+    pac_irq_mask = 0; pac_vector = 0; pac_irq_line = 0; pac_latch = 0;
     pac_spr_ncells = 0;
     z80_reset();
     /* Lockstep with MAME's pacman driver (tools/lockstep): its vblank IRQ is taken at the

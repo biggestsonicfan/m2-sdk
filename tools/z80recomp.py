@@ -210,7 +210,7 @@ def main():
          '',
          '/* one interpreted instruction at z80.pc (out of line: one copy of the interpreter) */',
          'static __attribute__((noinline)) int z80rc_interp1(z80_t *zp) {',
-         '    int op = z80_imm8(zp);',
+         '    int op = z80_m1(zp);',
          '    do op = z80_exec_main(zp, (z80_u8)op); while (op >= 0);',
          '    return op;',
          '}',
@@ -229,8 +229,9 @@ def main():
          '        if (z80.events) {                                /* as z80_run */',
          '            if (z80.irq_line && z80.iff1 && !z80.ei_delay) { z80_take_irq(zp); continue; }',
          '            if (z80.halted) {',
-         '                if (z80.ei_delay) { z80.ei_delay = 0; z80.cycles -= 4; continue; }',
+         '                if (z80.ei_delay) { z80.ei_delay = 0; z80.rr++; z80.cycles -= 4; continue; }',
          '                if (z80.irq_line && z80.iff1) continue;',
+         '                z80.rr = (z80_u8)(z80.rr + ((z80.cycles + 3) >> 2));   /* an M1 each */',
          '                z80.cycles -= (z80.cycles + 3) & ~3; break;   /* whole HALT NOPs */',
          '            }',
          '            if (z80.ei_delay) { z80.ei_delay = 0; z80rc_interp1(zp); continue; }',
@@ -245,7 +246,9 @@ def main():
                      % (p, p, nxt & 0xffff))
         else:
             nt += 1
-            o.append('        case 0x%04x: %s if (z80.pc != 0x%04x || z80.cycles <= 0) continue;' % (p, code, nxt & 0xffff))
+            m1 = 2 if rom[p & 0x3fff] in (0xcb, 0xed, 0xdd, 0xfd) else 1     # R: M1 cycles of the op
+            o.append('        case 0x%04x: z80.rr += %d; %s if (z80.pc != 0x%04x || z80.cycles <= 0) continue;'
+                     % (p, m1, code, nxt & 0xffff))
     o += ['        default:                                         /* not traced: interpret */',
           '            z80rc_interp1(zp);',
           '            continue;',

@@ -226,19 +226,37 @@ START1/2, SERVICE = credit.
   correlates 0.996. Without the passthrough program the game runs silent ("NO SOUND").
 - **Lockstep with MAME's own Pac-Man:** `tools/lockstep/run.sh` plays one input script
   (a coin, a start and a pseudo-random stick) into MAME's `pacman` driver and into the i960
-  port under MAME's Model 2 driver, and compares them frame by frame: the Z80's RAM
-  0x4000-0x4FFF, the sprite registers, and every 60th picture. Over 3000 frames 2992 are
-  byte-exact; the other 8 differ in one or two bytes for one frame (the instruction astride
-  the frame edge: MAME's Z80 is cycle-stepped, so at its frame end that one is part done).
-  Pictures: every drawn frame is identical (checked for all of frames 2400-2700 on the host
-  build); the port's misses are frames it did not draw (57.5 Hz display, frameskip in the
-  boot test), and each equals MAME's earlier picture. Getting there took matching MAME in
-  the core and board: registers reset to 0 (IX/IY FFFF), a level-held INT line cleared by the
-  game's latch (`Z80_EXT_IRQ`), whole 4-cycle NOPs in HALT, the vblank IRQ seen by an
-  instruction that ends one cycle before the frame edge, and an idle skip that fast-forwards
-  whole passes of the wait loop only while the task queue really is empty (it used to be
-  able to hold a task over a frame). It also found a sprite-restore bug (a stray pixel for a
-  frame now and then).
+  port under MAME's Model 2 driver (`EPROMS=roms/pacman_web`: the three EPROMs over a stock
+  `sfight` set, as a board or Pinboard runs it), and `compare.py` checks everything, frame by
+  frame. Over 6000 frames (two games):
+  - **Memory** (0x4000-0x4FFF and the sprite registers): 5992 frames byte-exact; the other 8
+    differ in one or two bytes for one frame (the instruction astride the frame edge:
+    MAME's Z80 is cycle-stepped, so at its frame end that one is part done).
+  - **The Z80's registers**, all of them (AF BC DE HL, the alternate set, IX IY SP PC, I, R,
+    IM, IFF1/2, HALT), taken as each IRQ is accepted (an instruction boundary on both: the
+    port's `Z80_IRQ_HOOK`, a tap on MAME's vector read): identical at all 5707 IRQs.
+  - **The board**: the 74LS259 latch (IRQ enable, sound enable, flip, lamps, coin lines),
+    the IRQ mask and IM 2 vector, and all 32 WSG registers: identical in all 6000 frames,
+    and MAME's decoded voices (frequency, volume, waveform) equal the port's decode.
+  - **What the SCSP plays**: every register write the sound board makes to slots 0-2 is
+    logged; the 2854 pitch/level/waveform writes the WSG state asks for all arrive, the
+    same values in the same order, 4-64 ms (mean 8.5) after their frame starts (they cross
+    the sound UART at ~2 ms per write).
+  - **The audio**: MAME's WSG against the port's SCSP, per frame with sound (2433): the
+    port's trails by 11 ms; loudness correlates 0.970, the spectra match (median cosine
+    1.000, >= 0.9 in 92% of frames).
+  - **Pictures** (every 60th): 94 of 100 identical; the other 6 are frames the port did not
+    draw (57.5 Hz display, frameskip in the boot test), each exactly MAME's picture from 1-3
+    frames before.
+
+  Getting there took matching MAME in the core and board: registers reset to 0 (IX/IY
+  FFFF), a level-held INT line cleared by the game's latch (`Z80_EXT_IRQ`), whole 4-cycle
+  NOPs in HALT, the vblank IRQ seen by an instruction that ends one cycle before the frame
+  edge, an idle skip that fast-forwards whole passes of the wait loop only while the task
+  queue really is empty (it used to be able to hold a task over a frame), and R counted
+  exactly (one per M1: two for prefixed ops, one per HALT NOP and IRQ acknowledge, bit 7
+  kept apart; the recompiler adds each op's count). It also found a sprite-restore bug (a
+  stray pixel for a frame now and then).
 - **Tests:** `tools/z80test/z80test.c` runs zexdoc (67/67 pass) against the core on the
   host, and `tools/pachost.c` runs the whole board on the host and writes a PPM.
 - **In the browser:** `src/pacman_web.c` is Pac-Man without the SHARC boot. A booted SHARC
