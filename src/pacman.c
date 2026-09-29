@@ -52,6 +52,8 @@
 #define PAC_HZ   60606u                /* Pac-Man frame rate, mHz (MAME pacman: 18.432 MHz/3/384/264) */
 #define M2_HZ    57524u                /* Model 2 vblank rate, mHz (16 MHz / 656 / 424) */
 
+#define PAC_MAX_SKIP 3                 /* frameskip: draw at least every 4th vblank */
+
 #define PAC_COL0 17                    /* Pac-Man screen origin on the tile plane, in cells */
 #define PAC_ROW0 6
 
@@ -204,8 +206,9 @@ int main(void) {
         /* Pac-Man runs at 60.61 Hz, the Model 2 refreshes at 57.52 Hz (MAME sega/model2.cpp:
          * 32 MHz/2 / (656 x 424)), so about every 19th vblank runs two Pac-Man frames and
          * draws only the second. Frameskip: after a vblank that overran, skip drawing the
-         * next (never two in a row), so a busy Z80 keeps the game at full speed. */
-        int render = !(late && !skipped), n, k;
+         * next (at most PAC_MAX_SKIP in a row), so a busy Z80 keeps the game at full speed;
+         * gameplay never overruns, only the power-on self-test does. */
+        int render = !(late && skipped < PAC_MAX_SKIP), n, k;
         tick += PAC_HZ;
         for (n = 0; tick >= M2_HZ; n++) tick -= M2_HZ;
         for (k = 0; k < n; k++) {
@@ -219,7 +222,7 @@ int main(void) {
             frames++;
         }
         if (render) pac_blit();
-        skipped = !render;
+        skipped = render ? 0 : skipped + 1;
         late = frameVBL != last;
 #ifndef PAC_BENCH                      /* -DPAC_BENCH: run flat out, SPEED shows the headroom */
         while (frameVBL == last) m2_scsp_pump();   /* one vblank's worth per vblank; feed the UART */
