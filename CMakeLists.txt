@@ -68,8 +68,12 @@ add_custom_target(rom ALL
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/stfbin2rom.py"
             --input game.bin --output "${CMAKE_SOURCE_DIR}/roms"
+    # the flat image too, per game (not clobbered by other builds): tools/m2_load.lua
+    # boots it on a stock sfight romset, e.g. in Pinboard's web MAME
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}"
+    COMMAND ${CMAKE_COMMAND} -E copy game.bin "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}/game.bin"
     COMMAND ${CMAKE_COMMAND} -E echo
-            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16"
+            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16  roms/${M2_GAME}/game.bin"
     DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)
@@ -80,3 +84,17 @@ add_custom_target(show-asm
     DEPENDS game.elf
     COMMENT "Disassembling ${M2_GAME} game.elf for i960-elf"
     VERBATIM)
+
+# ninja -C build snd   (re-assemble the sound board's 68000 program, snd/scsp_passthru.bin;
+# the .bin is committed, so this is only needed after editing snd/scsp_passthru.s)
+find_program(M68K_AS NAMES m68k-linux-gnu-as m68k-elf-as)
+find_program(M68K_LD NAMES m68k-linux-gnu-ld m68k-elf-ld)
+if(M68K_AS AND M68K_LD)
+    add_custom_target(snd
+        COMMAND ${M68K_AS} -m68000 -o scsp_passthru.o "${CMAKE_SOURCE_DIR}/snd/scsp_passthru.s"
+        COMMAND ${M68K_LD} -Ttext=0x600000 --oformat binary
+                -o "${CMAKE_SOURCE_DIR}/snd/scsp_passthru.bin" scsp_passthru.o
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        COMMENT "Assembling snd/scsp_passthru.s (68000 sound program)"
+        VERBATIM)
+endif()

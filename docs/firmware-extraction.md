@@ -68,6 +68,22 @@ headers this SDK was developed with byte for byte — 29724 bytes / 14862 halfwo
 `cpres_data`, 18702 / 9351 for `cpres_data2` — with only the generated-from comment line
 differing.
 
+#### Or assemble them from source (stf-sharc)
+
+[stf-sharc](https://github.com/biggestsonicfan/stf-sharc) is the annotated disassembly
+of both images, and it reassembles byte for byte (stf-tools' `test-cpres.mjs` checks the
+linked `.exe` against the ROM). `tools/sharc2h.py` turns its linked `cpres1.exe` /
+`cpres2.exe` straight into the headers. It reads the `seg_pmco` section and byte-reverses
+each 48-bit word into ROM order:
+
+```sh
+python3 tools/sharc2h.py ../stf-sharc/cpres1.exe src/cpres1.h cpres_data
+python3 tools/sharc2h.py ../stf-sharc/cpres2.exe src/cpres2.h cpres_data2
+```
+
+The arrays match the ROM extract above value for value (14862 and 9351 halfwords); only
+the comment line differs. This is how `src/pacman.c` gets its SHARC firmware.
+
 ### Power Sled (`psled_*.h`) — still by hand
 
 stf-tools only knows the Sonic the Fighters romset, so the three Power Sled headers have
