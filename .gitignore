@@ -14,3 +14,4 @@ src/psled_cpres2.h
 src/psled_palette.h
 src/pacman_roms.h
 src/puckman_roms.h
+!snd/scsp_passthru.bin
