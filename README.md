@@ -206,7 +206,8 @@ START1/2, SERVICE = credit.
   and sound registers hashed every frame) match the interpreter exactly, for both sets.
   The generated `src/<set>_recomp.h` is derived from the ROM, so it is git-ignored; the
   build uses it when present (`-DPAC_NO_RECOMP` to leave it out). It is big: the program
-  ROM goes from ~240 KB to ~1000 KB of the 1 MB, and cc1 needs ~650 MB for ~100 s.
+  ROM goes from ~240 KB to ~750 KB of the 1 MB (bus writes other than work RAM are
+  one out-of-line `pac_wr_slow`, not inlined at every site), and cc1 needs ~650 MB for ~100 s.
 - **Colours:** a tile-palette write goes through the colour-translation table (row = the
   5-bit channel, pen 0x40, MAME `palette_w`). The STF table `m2_init` builds saturates
   that column, so `pacman.c` rewrites it as a linear ramp before loading its palette.
