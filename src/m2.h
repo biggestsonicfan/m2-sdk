@@ -146,6 +146,15 @@ M2_API void m2_uart_hex(u32 v) {           /* "XXXXXXXX" big-endian nibbles */
  * that keeps a GS_STANDALONE build — app + kernel linked into one image — from
  * hitting a multiple-definition collision on them. */
 M2_API void handleSerialIRQ(void) { }
+
+/* Board IRQ bits 10-11 (i960 IRQ3, vector 15: i_handle.s _other_irq). Bit 10 is the sound
+ * UART's TxRDY/RxRDY (MAME sega/model2.cpp sound_ready_w); it is only enabled by a program
+ * that sets m2_other_hook (m2_scsp_irq_start: interrupt-driven sending to the sound board). */
+M2_API void (*m2_other_hook)(void);
+M2_API void m2_other_irq_c(void) {
+    M2_IRQ_REQ = ~0x400u;                     /* ack bit 10 (the request register is AND-ed) */
+    if (m2_other_hook) m2_other_hook();
+}
 M2_API void kickGEO(void) { }
 M2_API void waitVBL(void) { }
 

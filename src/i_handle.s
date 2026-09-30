@@ -154,12 +154,24 @@ _timer_irq:
 	ldq     (sp),g0
 	ret
 
-# Other (STF vector 15 @0xDF0): STF checks IRQ bit10 -> send_sound_code (absent
-# here). Just ACK defensively.
+# Other (STF vector 15 @0xDF0, board IRQ bits 10-11 on i960 IRQ3): STF sends its
+# sound codes from here (bit 10 = the sound UART's TxRDY/RxRDY, MAME sega/model2.cpp
+# sound_ready_w). Calls m2_other_irq_c (m2.h), which acks bit 10 and runs the
+# program's hook (m2_scsp.h's interrupt-driven sending). Saves g0-g15 as _irq_vblank.
 _other_irq:
-	lda     0x00e80000,r4
-	subi    1,0,r5					# r5 = 0xFFFFFFFF
-	st      r5,(r4)					# ack
+	mov     sp, r3
+	lda     64(sp), sp
+	stq     g0,  (r3)
+	stq     g4,  16(r3)
+	stq     g8,  32(r3)
+	stq     g12, 48(r3)
+	mov     0, g14
+	call    _m2_other_irq_c
+	ldq     (r3),   g0
+	ldq     16(r3), g4
+	ldq     32(r3), g8
+	ldq     48(r3), g12
+	mov     r3, sp
 	ret
 
 # IntrHalt (STF vectors 8-11, 16+ @0xE10): unexpected interrupt -> STF prints

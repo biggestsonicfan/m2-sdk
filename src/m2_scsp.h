@@ -13,7 +13,8 @@
  *     m2_scsp_flush();                     // or m2_scsp_pump() every so often
  *
  * Writes are queued and sent without blocking: call m2_scsp_pump() whenever there is time
- * (a vblank wait is ideal) — the UART takes a byte about every 320 us, ~50 per frame.
+ * (a vblank wait is ideal) — the UART takes a byte about every 320 us, ~50 per frame —
+ * or m2_scsp_irq_start() once, after m2_scsp_probe, to have the UART's interrupt send them.
  * A register write costs 6 bytes, a RAM write 7.
  *
  * Include AFTER m2.h (uses M2_SND_DATA / M2_SND_CTL, M2_API).
@@ -69,10 +70,29 @@ M2_API void m2_scsp_flush(void) {
 
 M2_API u32 m2_scsp_pending(void) { return (m2_scsp_qt - m2_scsp_qh) & (M2_SCSP_QLEN - 1u); }
 
+/* Interrupt-driven sending (m2_scsp_irq_start): each time the UART takes a byte its
+ * TxRDY interrupt (board bit 10) hands it the next, so a busy program sends at the line's
+ * full rate without pumping. Received bytes (the relay's ping answers) are dropped. */
+static u8 m2_scsp_irq;
+static void m2__scsp_isr(void) {
+    while (M2_SND_CTL & 0x02u) (void)M2_SND_DATA;
+    m2_scsp_pump();
+}
+M2_API void m2_scsp_irq_start(void) {
+    m2_other_hook = m2__scsp_isr;
+    m2_scsp_irq = 1;
+    M2_WRITE_TWICE(M2_IRQ_ENA, M2_IRQ_VBL | 0x400u);
+    m2_irq_off(); m2_scsp_pump(); m2_irq_on();
+}
+
 static void m2__scsp_put(u8 b) {
-    while (m2_scsp_pending() == M2_SCSP_QLEN - 1u) m2_scsp_pump();   /* full: drain */
+    while (m2_scsp_pending() == M2_SCSP_QLEN - 1u) {                   /* full: drain */
+        if (m2_scsp_irq) { m2_irq_off(); m2_scsp_pump(); m2_irq_on(); } else m2_scsp_pump();
+    }
     m2_scsp_q[m2_scsp_qt] = b;
     m2_scsp_qt = (m2_scsp_qt + 1u) & (M2_SCSP_QLEN - 1u);
+    /* the UART idle (no interrupt coming): start it */
+    if (m2_scsp_irq && (M2_SND_CTL & 0x01u)) { m2_irq_off(); m2_scsp_pump(); m2_irq_on(); }
 }
 
 /* SCSP register write: word at SCSP offset `reg` (0x000-0xFFE) = v. */

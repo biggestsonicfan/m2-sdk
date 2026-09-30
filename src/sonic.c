@@ -8,8 +8,9 @@
  * src/md_hw.h. The picture goes onto the Model 2's System 24 tilemaps (src/md_s24.h):
  * plane B and plane A on the two scrolling layers, the sprites composited into plane A's
  * cells. The 320x224 screen sits in the middle of the 496x384 one.
- * The sound board's own 68000 is left as it is for Pac-Man: the SCSP relay
- * (snd/scsp_passthru.s), which Sonic's sound will play through (not yet).
+ * The sound board's own 68000 runs the SCSP relay of Pac-Man (snd/scsp_passthru.s): the
+ * i960 re-voices the YM2612 and PSG on the SCSP through it (src/md_snd.h). With the stock
+ * sound EPROM the game runs silent ("NO SOUND" on the panel).
  *
  * ROM: `python3 tools/mdrom.py sonic.bin` writes src/sonic_rom.h (gitignored, Sega data).
  *
@@ -33,6 +34,9 @@ static u32 md_insns;                    /* 68000 instructions run (the panel's s
 #define MD_INTERRUPT() m68k_interrupt()
 #define MD_STEP()      (md_insns++, m68k_step())
 #include "md_hw.h"
+
+#include "m2_scsp.h"
+#include "md_snd.h"                     /* YM2612 + PSG re-voiced on the SCSP */
 
 #define S24_TILE ((volatile u16 *)0x01000000u)
 #define S24_CHAR ((volatile u16 *)0x01080000u)
@@ -107,6 +111,8 @@ int main(void) {
     s24_text(11, 42, "68K K");
     s24_text(28, 42, "VIDEO K");
     s24_text(11, 44, "68K/FRAME");
+    snd_init();                         /* waits up to 1.5 s for the relay to answer */
+    s24_text(11, 7, snd_ok ? "SCSP SOUND" : "NO SOUND");
     M2_TIMER3 = 0xffffffffu;
 
 #ifdef SONIC_BENCH_FRAMES
@@ -153,6 +159,7 @@ int main(void) {
             sonic_read_inputs();
             md_frame();
             t_cpu += t - M2_TIMER3;
+            snd_update();
             frames++;
         }
         { u32 t = M2_TIMER3; s24_update(); t_vid += t - M2_TIMER3; draws++; }
