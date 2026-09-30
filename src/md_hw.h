@@ -453,7 +453,7 @@ static void md_reset(void) {
 static u32 md_frames;
 static u32 md_cyc_frac;                 /* master clocks not yet given to the 68000 */
 
-static __attribute__((noinline)) void md_line_events(int line) {
+static inline void md_line_events(int line) {
     if (line == MD_VIS_LINES) { md_irq6_pending = 1; md_vblank = 1; }
     if (line <= MD_VIS_LINES) {
         if (--md_irq4counter == -1) {

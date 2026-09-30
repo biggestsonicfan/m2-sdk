@@ -109,6 +109,24 @@ int main(void) {
     s24_text(11, 44, "68K/FRAME");
     M2_TIMER3 = 0xffffffffu;
 
+#ifdef SONIC_BENCH_FRAMES
+    /* -DSONIC_BENCH_FRAMES=n: a fixed benchmark. The attract mode (no input) for n frames,
+     * a picture every 2nd, then the i960 cycles each part took, in thousands */
+    {
+        u32 f, c68 = 0, cv = 0, tt;
+        for (f = 0; f < SONIC_BENCH_FRAMES; f++) {
+            M2_TIMER3 = 0xffffffffu; tt = M2_TIMER3;
+            md_frame();
+            c68 += (tt - M2_TIMER3) >> 10;
+            if (f & 1) { M2_TIMER3 = 0xffffffffu; tt = M2_TIMER3; s24_update(); cv += (tt - M2_TIMER3) >> 10; }
+        }
+        s24_text(11, 44, "BENCH 68K/F");
+        num(buf, c68 * 1024u / 1000u / SONIC_BENCH_FRAMES, 6); s24_text(24, 44, buf);
+        s24_text(31, 44, "VID/PIC");
+        num(buf, cv * 1024u / 1000u / (SONIC_BENCH_FRAMES / 2), 6); s24_text(39, 44, buf);
+        for (;;) { }
+    }
+#endif
     seen = t0 = frameVBL;
     for (;;) {
         u32 n, k;

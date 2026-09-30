@@ -43,9 +43,10 @@
 #define S24_LAYER_B   0x2000u
 #define S24_LAYER_BW  0x3000u
 
-#define S24_VAR_GROUPS 96                /* groups 0-95: (pattern, flip, line) chars */
-#define S24_POOL0      96                /* groups 96-119: composite (sprite) chars, handed */
-#define S24_POOL       24                /* out each frame to a line or to a mixed bank */
+#define S24_VAR_GROUPS 72                /* groups 0-71: (pattern, flip, line) chars */
+#define S24_POOL0      72                /* groups 72-119: composite (sprite) chars, handed */
+#define S24_POOL       48                /* out each frame to a line or to a mixed bank; two */
+#define S24_HALF       24                /* halves, alternate frames (built unseen, then shown) */
 #define S24_UI_GROUP   120               /* the font (m2font gFont) */
 #define S24_BLK_GROUP  121               /* its char 0: solid pen 1 (black) */
 
@@ -79,6 +80,7 @@ static u8  s24_blank = 0xff;             /* display disabled, as last written */
 #define S24_MAXCMP 1024
 typedef struct {
     u16 cell;                            /* layer A cell (row * 64 + col, rows 0-63) */
+    u16 ent;                             /* its composite tile entry, 0 = none (out of room) */
     u16 gcell;                           /* the Mega Drive name entry behind it (0-2047) */
     u8  aline, apri;                     /* plane A's palette line, priority (0x80) */
     u32 a[8];                            /* plane A's pixels */
@@ -89,6 +91,8 @@ static s24_cmp_t s24_cmp[S24_MAXCMP];
 static int s24_ncmp;
 static u16 s24_cmp_of[4096];             /* layer A cell -> composite record + 1 */
 static u16 s24_prev[S24_MAXCMP];         /* the Mega Drive entries composited last frame */
+static u16 s24_prev_cell[S24_MAXCMP];    /* ... and their layer A cells */
+static u8  s24_half;                     /* the pool half this frame builds in */
 static int s24_nprev;
 static u32 s24_bank_set[S24_POOL][2];    /* mixed banks: the CRAM indexes in it */
 static u8  s24_bank_n[S24_POOL];         /* pens used (1-15) */
@@ -100,7 +104,7 @@ static u8  s24_pool_line[S24_POOL];      /* the line a pool group holds, 0xff = 
 static u8  s24_bank_list[S24_POOL];      /* this frame's mixed banks */
 static int s24_npool, s24_nbanks;        /* pool groups taken this frame, mixed banks */
 static int s24_lgrp[4];                  /* the pool group each line fills, -1 = none */
-static u8  s24_onl[224], s24_mask[224];      /* sprites on a line so far, line masked */
+static u8  s24_hsrun[224];                   /* lines from here on with the same plane A scroll (<= 8) */
 static u32 s24_ncomposited, s24_nmixed;      /* statistics: composite cells, mixed ones */
 
 /* a row of eight pixels mirrored */
@@ -242,58 +246,83 @@ static __attribute__((noinline)) s24_cmp_t *s24_rec(u32 cell, u32 grow) {
     return rec;
 }
 
-/* put a sprite row's pixels (R, set in M) into row y of a cell, where no earlier sprite is */
-static inline void s24_put(u32 cell, u32 grow, u32 y, u32 R, u32 M, u32 L, u32 P) {
+/* the record for a layer A cell, made on first use (0 when out of records) */
+static inline s24_cmp_t *s24_get(u32 cell, u32 grow) {
     u16 k = s24_cmp_of[cell];
-    s24_cmp_t *rec = k ? &s24_cmp[k - 1] : s24_rec(cell, grow);
-    u32 f;
-    if (!rec) return;
-    f = M & ~rec->sm[y];
+    return k ? &s24_cmp[k - 1] : s24_rec(cell, grow);
+}
+/* put a sprite row's pixels (R, set in M) into row y of a record, where no earlier sprite is */
+static inline void s24_put(s24_cmp_t *rec, u32 y, u32 R, u32 M, u32 L, u32 P) {
+    u32 f = M & ~rec->sm[y];
     rec->s[y] |= R & f; rec->sm[y] |= f; rec->sl[y] |= L & f; rec->sp[y] |= P & f;
 }
+/* a row shifted right by sh pixels (0-7) into two neighbouring cells of map row my */
+static inline void s24_put2(u32 my, u32 mx, u32 R, u32 M, u32 L, u32 P) {
+    u32 sh = (mx & 7) * 4, row = (my >> 3) * 64;
+    s24_cmp_t *rec;
+    if ((M >> sh) && (rec = s24_get(row + (mx >> 3), my >> 3)))
+        s24_put(rec, my & 7, R >> sh, M >> sh, L >> sh, P >> sh);
+    if (sh && (M << (32 - sh)) && (rec = s24_get(row + (((mx >> 3) + 1) & 63), my >> 3)))
+        s24_put(rec, my & 7, R << (32 - sh), M << (32 - sh), L << (32 - sh), P << (32 - sh));
+}
 
-/* rasterize the sprite list into composite records (layer A's map space), a row of eight
- * pixels at a time */
+/* rasterize the sprite list into composite records (layer A's map space). A sprite tile
+ * lies over at most 2 x 2 plane cells: when plane A's scroll is the same on its 8 lines
+ * (the usual case) those are looked up once and the rows only shifted in. First in the
+ * list wins, as on the VDP; its 20-a-line limit and x = 0 masking are not done. */
 static __attribute__((noinline)) void s24_sprites(u32 vsA) {
     u32 base = (u32)(md_reg[5] & 0x7e) << 9, link = 0, count = 0;
-    int i;
-    for (i = 0; i < 224; i++) { s24_onl[i] = 0; s24_mask[i] = 0; }
     do {
         u32 a = (base + link * 8) & 0xffff;
         u16 w0 = md_vram[a >> 1], w1 = md_vram[(a >> 1) + 1], w2 = md_vram[(a >> 1) + 2], w3 = md_vram[(a >> 1) + 3];
         int sy = (int)(w0 & 0x3ff) - 128, sx = (int)(w3 & 0x1ff) - 128;
-        int cw = ((w1 >> 10) & 3) + 1, ch = ((w1 >> 8) & 3) + 1, y0, y1, gy;
+        int cw = ((w1 >> 10) & 3) + 1, ch = ((w1 >> 8) & 3) + 1, tr, tc;
         u32 L = 0x11111111u * ((w2 >> 13) & 3), P = (w2 & 0x8000) ? 0xffffffffu : 0;
+        u32 hf = w2 & 0x0800, vf = w2 & 0x1000;
         link = w1 & 0x7f;
         count++;
-        y0 = sy < 0 ? 0 : sy; y1 = sy + ch * 8 > 224 ? 224 : sy + ch * 8;
-        for (gy = y0; gy < y1; gy++) {
-            int r = gy - sy, c;
-            u32 my, hs;
-            if (++s24_onl[gy] > 20 || s24_mask[gy]) continue;
-            if ((w3 & 0x1ff) == 0) { if (s24_onl[gy] > 1) s24_mask[gy] = 1; continue; }
-            if (sx >= 320 || sx + cw * 8 <= 0) continue;
-            if (w2 & 0x1000) r = ch * 8 - 1 - r;
-            my = ((u32)gy + vsA) & 511;
-            hs = s24_hsA[gy];
-            for (c = 0; c < cw; c++) {
-                int tc = (w2 & 0x0800) ? cw - 1 - c : c, gx = sx + c * 8;
-                const u16 *s = &md_vram[(((w2 & 0x7ff) + tc * ch + (r >> 3)) & 0x7ff) * 16 + (r & 7) * 2];
-                u32 row = ((u32)s[0] << 16) | s[1], M, mx, sh, cell;
-                if (!row || gx <= -8 || gx >= 320) continue;
-                if (w2 & 0x0800) row = s24_rev32(row);
-                M = s24_opaque(row);
-                if (gx < 0) M &= 0xffffffffu >> (-gx * 4);                /* clip left */
-                if (gx > 312) M &= 0xffffffffu << ((gx - 312) * 4);      /* clip right */
-                mx = ((u32)gx - hs) & 511;
-                sh = mx & 7;
-                cell = (my >> 3) * 64 + (mx >> 3);
-                if (!sh) { s24_put(cell, my >> 3, my & 7, row, M, L, P); continue; }
-                if (M >> (sh * 4))
-                    s24_put(cell, my >> 3, my & 7, row >> (sh * 4), M >> (sh * 4), L >> (sh * 4), P >> (sh * 4));
-                if (M << ((8 - sh) * 4))
-                    s24_put((my >> 3) * 64 + (((mx >> 3) + 1) & 63), my >> 3, my & 7,
-                            row << ((8 - sh) * 4), M << ((8 - sh) * 4), L << ((8 - sh) * 4), P << ((8 - sh) * 4));
+        if (sx >= 320 || sx + cw * 8 <= 0 || sy >= 224 || sy + ch * 8 <= 0) continue;
+        for (tr = 0; tr < ch; tr++) {
+            int gy0 = sy + tr * 8, ya = gy0 < 0 ? -gy0 : 0, yb = gy0 + 8 > 224 ? 224 - gy0 : 8;
+            u32 trow = vf ? (u32)(ch - 1 - tr) : (u32)tr;
+            if (ya >= yb) continue;
+            for (tc = 0; tc < cw; tc++) {
+                int gx = sx + tc * 8, r;
+                const u16 *pat = &md_vram[(((w2 & 0x7ff) + (hf ? (u32)(cw - 1 - tc) : (u32)tc) * ch + trow) & 0x7ff) * 16];
+                u32 Mc = 0xffffffffu;
+                if (gx <= -8 || gx >= 320) continue;
+                if (gx < 0) Mc = 0xffffffffu >> (-gx * 4);                   /* clip left */
+                if (gx > 312) Mc = 0xffffffffu << ((gx - 312) * 4);          /* clip right */
+                if (ya == 0 && yb == 8 && s24_hsrun[gy0] >= 8) {
+                    /* the whole tile at one scroll: at most four cells, found once */
+                    u32 mx = ((u32)gx - s24_hsA[gy0]) & 511, my0 = ((u32)gy0 + vsA) & 511;
+                    u32 sh = (mx & 7) * 4, c0 = mx >> 3, c1 = (c0 + 1) & 63;
+                    s24_cmp_t *r0 = 0, *r1 = 0;
+                    u32 cur = 0xffffffffu;
+                    for (r = 0; r < 8; r++) {
+                        const u16 *p = pat + (vf ? 7 - r : r) * 2;
+                        u32 row = ((u32)p[0] << 16) | p[1], M, my, crow;
+                        if (!row) continue;
+                        if (hf) row = s24_rev32(row);
+                        M = s24_opaque(row) & Mc;
+                        my = (my0 + (u32)r) & 511;
+                        crow = my >> 3;
+                        if (crow != cur) { cur = crow; r0 = r1 = 0; }   /* a new cell row */
+                        if ((M >> sh) && (r0 || (r0 = s24_get(crow * 64 + c0, crow))))
+                            s24_put(r0, my & 7, row >> sh, M >> sh, L >> sh, P >> sh);
+                        if (sh && (M << (32 - sh)) && (r1 || (r1 = s24_get(crow * 64 + c1, crow))))
+                            s24_put(r1, my & 7, row << (32 - sh), M << (32 - sh), L << (32 - sh), P << (32 - sh));
+                    }
+                    continue;
+                }
+                for (r = ya; r < yb; r++) {                         /* line by line */
+                    int gy = gy0 + r;
+                    const u16 *p = pat + (vf ? 7 - r : r) * 2;
+                    u32 row = ((u32)p[0] << 16) | p[1];
+                    if (!row) continue;
+                    if (hf) row = s24_rev32(row);
+                    s24_put2(((u32)gy + vsA) & 511, ((u32)gx - s24_hsA[gy]) & 511, row, s24_opaque(row) & Mc, L, P);
+                }
             }
         }
     } while (link && count < 80);
@@ -303,36 +332,38 @@ static int s24_popc(u32 v) { int n = 0; while (v) { v &= v - 1; n++; } return n;
 
 /* resolve the records into chars: a cell showing one palette line goes into that line's
  * composite groups as it is; a mixed one gets its colours a bank of up to 15 */
+static void s24_nt(u32 layer, u16 *shadow, u32 base, u32 i);
 static __attribute__((noinline)) void s24_composite(void) {
-    int i, k, b, j;
-    s24_nbanks = 0; s24_npool = 0;
+    int i, k, b = 0, j;
+    s24_nbanks = 0; s24_npool = s24_half * S24_HALF;
     for (k = 0; k < 4; k++) s24_lgrp[k] = -1;
-    s24_nprev = 0; s24_nmixed = 0;
+    s24_nmixed = 0;
     for (i = 0; i < s24_ncmp; i++) {
         s24_cmp_t *rec = &s24_cmp[i];
-        u32 out[8], lin[8], y, cat = rec->apri, AL = 0x11111111u * rec->aline, mixed = 0, idx;
-        u32 anyl = 0xffffffffu, L0 = 0;
+        u32 out[8], lin[8], y, cat = rec->apri, AL = 0x11111111u * rec->aline, mixed, idx, L;
+        u32 any0 = 0, not0 = 0, any1 = 0, not1 = 0;
         for (y = 0; y < 8; y++) {
-            u32 am = s24_opaque(rec->a[y]);
-            /* a sprite pixel shows unless plane A there is opaque and high and it is low */
-            u32 win = rec->sm[y] & (rec->apri ? (~am | rec->sp[y]) : 0xffffffffu);
-            out[y] = (rec->s[y] & win) | (rec->a[y] & ~win);
-            lin[y] = (rec->sl[y] & win) | (AL & ~win);
-            if (win & rec->sp[y]) cat = 0x80;
-            /* the lines of the opaque pixels shown */
-            {
-                u32 om = s24_opaque(out[y]), l = lin[y] & om;
-                if (om) {
-                    if (anyl == 0xffffffffu) { u32 n = 0; while (!((om >> (n * 4)) & 15)) n++; L0 = (l >> (n * 4)) & 3; anyl = 0x11111111u * L0; }
-                    if ((l ^ (anyl & om)) != 0) mixed = 1;
-                }
+            u32 sm = rec->sm[y], o1, l;
+            if (!sm) { out[y] = rec->a[y]; lin[y] = AL; }
+            else {
+                /* a sprite pixel shows unless plane A there is opaque and high and it is low */
+                u32 win = rec->apri ? sm & (~s24_opaque(rec->a[y]) | rec->sp[y]) : sm;
+                out[y] = (rec->s[y] & win) | (rec->a[y] & ~win);
+                lin[y] = (rec->sl[y] & win) | (AL & ~win);
+                if (win & rec->sp[y]) cat = 0x80;
             }
+            /* the lines of the opaque pixels, as two bit planes */
+            o1 = s24_opaque(out[y]) & 0x11111111u;
+            l = lin[y];
+            any0 |= l & o1; not0 |= ~l & o1;
+            any1 |= (l >> 1) & o1; not1 |= ~(l >> 1) & o1;
         }
+        mixed = (any0 && not0) || (any1 && not1);
+        L = (any0 || any1 || not0 || not1) ? (any0 ? 1u : 0u) | (any1 ? 2u : 0u) : rec->aline;
         if (!mixed) {
-            u32 L = anyl == 0xffffffffu ? rec->aline : L0;
             int g = s24_lgrp[L];
             if (g < 0 || s24_bank_slots[g] >= 128) {        /* a pool group for this line */
-                if (s24_npool >= S24_POOL) continue;
+                if (s24_npool >= (s24_half + 1) * S24_HALF) { rec->ent = 0; continue; }
                 g = s24_npool++;
                 s24_bank_slots[g] = 0;
                 s24_lgrp[L] = g;
@@ -349,22 +380,25 @@ static __attribute__((noinline)) void s24_composite(void) {
                 for (y = 0; y < 8; y++) { d[y * 2] = (u16)(out[y] >> 16); d[y * 2 + 1] = (u16)out[y]; }
             }
         } else {
-            u32 set0 = 0, set1 = 0, x;
+            u32 set0, set1, sl[4] = { 0, 0, 0, 0 };
             s24_nmixed++;
-            for (y = 0; y < 8; y++)
-                for (x = 0; x < 32; x += 4) {
-                    u32 p = (out[y] >> x) & 15, ci;
-                    if (!p) continue;
-                    ci = ((lin[y] >> x) & 3) * 16 + p;
-                    if (ci < 32) set0 |= 1u << ci; else set1 |= 1u << (ci - 32);
-                }
+            /* the colours used, per line; pixel 0 (clear) lands on bit 0, dropped after */
+            for (y = 0; y < 8; y++) {
+                u32 o = out[y], l = lin[y];
+#define S24_SETPX(sh) sl[(l >> (sh)) & 3] |= 1u << ((o >> (sh)) & 15)
+                S24_SETPX(0); S24_SETPX(4); S24_SETPX(8); S24_SETPX(12);
+                S24_SETPX(16); S24_SETPX(20); S24_SETPX(24); S24_SETPX(28);
+#undef S24_SETPX
+            }
+            set0 = (sl[0] & 0xfffeu) | ((sl[1] & 0xfffeu) << 16);
+            set1 = (sl[2] & 0xfffeu) | ((sl[3] & 0xfffeu) << 16);
             for (j = 0; j < s24_nbanks; j++) {
                 b = s24_bank_list[j];
                 if (s24_bank_slots[b] < 128 &&
                     s24_bank_n[b] + s24_popc(set0 & ~s24_bank_set[b][0]) + s24_popc(set1 & ~s24_bank_set[b][1]) <= 15) break;
             }
             if (j == s24_nbanks) {                          /* a pool group as a new bank */
-                if (s24_npool >= S24_POOL) continue;
+                if (s24_npool >= (s24_half + 1) * S24_HALF) { rec->ent = 0; continue; }
                 b = s24_npool++;
                 s24_bank_list[s24_nbanks++] = (u8)b;
                 s24_bank_slots[b] = 0; s24_bank_n[b] = 0; s24_bank_set[b][0] = s24_bank_set[b][1] = 0;
@@ -382,18 +416,17 @@ static __attribute__((noinline)) void s24_composite(void) {
             idx = (S24_POOL0 + (u32)b) * 128 + s24_bank_slots[b]++;
             {
                 volatile u16 *d = &S24_CHAR[idx * 16];
+                const u8 *pen = s24_bank_pen[b];   /* entries line*16 + 0 stay 0: clear pixels */
                 for (y = 0; y < 8; y++) {
-                    u32 w = 0;
-                    for (x = 0; x < 32; x += 4) {
-                        u32 p = (out[y] >> (28 - x)) & 15;
-                        w = (w << 4) | (p ? s24_bank_pen[b][((lin[y] >> (28 - x)) & 3) * 16 + p] : 0);
-                    }
+                    u32 o = out[y], l = lin[y], w;
+#define S24_PEN(sh) ((u32)pen[(((l >> (sh)) & 3) << 4) | ((o >> (sh)) & 15)] << (sh))
+                    w = S24_PEN(0) | S24_PEN(4) | S24_PEN(8) | S24_PEN(12) | S24_PEN(16) | S24_PEN(20) | S24_PEN(24) | S24_PEN(28);
+#undef S24_PEN
                     d[y * 2] = (u16)(w >> 16); d[y * 2 + 1] = (u16)w;
                 }
             }
         }
-        S24_TILE[S24_LAYER_A + rec->cell] = (u16)((cat << 8) | idx);
-        s24_prev[s24_nprev++] = rec->gcell;
+        rec->ent = (u16)((cat << 8) | idx);
     }
     for (j = 0; j < s24_nbanks; j++) {
         b = s24_bank_list[j];
@@ -402,6 +435,18 @@ static __attribute__((noinline)) void s24_composite(void) {
             if (s24_bank_w[b][k] != c) { s24_bank_w[b][k] = c; S24_PAL[(S24_POOL0 + b) * 16 + k] = c; }
         }
     }
+    /* the swap, all at once: last frame's cells not composited now go back to plane A,
+     * then the new composite entries (their chars and colours are ready, unseen) */
+    for (i = 0; i < s24_nprev; i++)
+        if (!s24_cmp_of[s24_prev_cell[i]]) { s24_ntA[s24_prev[i]] = 0xffff; s24_nt(S24_LAYER_A, s24_ntA, s24_ntA_at, s24_prev[i]); }
+    s24_nprev = 0;
+    for (i = 0; i < s24_ncmp; i++) {
+        s24_cmp_t *rec = &s24_cmp[i];
+        if (!rec->ent) { s24_ntA[rec->gcell] = 0xffff; s24_nt(S24_LAYER_A, s24_ntA, s24_ntA_at, rec->gcell); continue; }
+        S24_TILE[S24_LAYER_A + rec->cell] = rec->ent;
+        s24_prev[s24_nprev] = rec->gcell; s24_prev_cell[s24_nprev++] = rec->cell;
+    }
+    s24_half ^= 1;
     for (i = 0; i < s24_ncmp; i++) s24_cmp_of[s24_cmp[i].cell] = 0;
     s24_ncomposited = (u32)s24_ncmp;
     s24_ncmp = 0;
@@ -483,9 +528,6 @@ static __attribute__((noinline)) void s24_update(void) {
             for (i = 0; i < 4096; i++) { s24_ntA[i] = 0xffff; s24_ntB[i] = 0xffff; }
             s24_nt_all = 1;
         }
-        /* last frame's composite cells go back to plane A's own chars */
-        for (i = 0; i < (u32)s24_nprev; i++) { s24_ntA[s24_prev[i]] = 0xffff; s24_nt(S24_LAYER_A, s24_ntA, ntA, s24_prev[i]); }
-        s24_nprev = 0;
         for (c = 0; c < n / 16; c++) {                   /* 16 entries a chunk */
             u32 ka = (ntA * 2 >> 5) + c, kb = (ntB * 2 >> 5) + c, k;
             if (s24_nt_all || ((nd[(ka >> 5) & 63] >> (ka & 31)) & 1))
@@ -510,6 +552,8 @@ static __attribute__((noinline)) void s24_update(void) {
         if (s24_hsA[i] != s24_hsA_w[i]) { s24_hsA_w[i] = s24_hsA[i]; S24_TILE[0x4000 + S24_Y0 + i] = (u16)((s24_hsA[i] + S24_X0) & 0x1ff); }
         if (s24_hsB[i] != s24_hsB_w[i]) { s24_hsB_w[i] = s24_hsB[i]; S24_TILE[0x4400 + S24_Y0 + i] = (u16)((s24_hsB[i] + S24_X0) & 0x1ff); }
     }
+    for (i = 224; i-- > 0; )
+        s24_hsrun[i] = (u8)(i < 223 && s24_hsA[i + 1] == s24_hsA[i] ? (s24_hsrun[i + 1] < 8 ? s24_hsrun[i + 1] + 1 : 8) : 1);
     vsA = md_vsram[0] & 0x3ff; vsB = md_vsram[1] & 0x3ff;
     if (blank != s24_blank) {
         s24_blank = (u8)blank;

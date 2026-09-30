@@ -694,7 +694,11 @@ PROLOGUE = r"""
     m68k.a[3] = A3; m68k.a[4] = A4; m68k.a[5] = A5; m68k.a[6] = A6; m68k.a[7] = A7; \
     m68k.x = FX; m68k.n = FN; m68k.z = FZ; m68k.v = FV; m68k.c = FC; } while (0)
 /* the registers and flags live in locals while the run lasts: RC_RET puts them back */
+#if RC_LOCALS
 #define RC_RET { RC_SAVE; m68k.cycles = cyc_; return 1; }
+#else
+#define RC_RET { m68k.cycles = cyc_; return 1; }
+#endif
 #define RC_WR_O(bits, a, v) do { if (rc_wr##bits##_o((a), (v), cyc_)) { md_cyc_owed += cyc_; cyc_ = 0; } } while (0)
 static __attribute__((noinline)) u32 rc_rd8_o(u32 a, int cyc) { m68k.cycles = cyc; return md_rd8(a); }
 static __attribute__((noinline)) u32 rc_rd16_o(u32 a, int cyc) { m68k.cycles = cyc; return md_rd16(a); }
@@ -739,6 +743,7 @@ def main():
     ap.add_argument('--cyc', default=os.path.join(os.path.dirname(__file__), '..', 'src', 'm2_m68k_cyc.h'))
     ap.add_argument('--budget', type=int, default=4000, help='instructions to translate (the most run)')
     ap.add_argument('--exact', action='store_true', help='end the run after any instruction, as the interpreter')
+    ap.add_argument('--no-locals', action='store_true', help='keep the 68000 registers in the m68k struct')
     a = ap.parse_args()
 
     rom = load_rom(a.rom)
@@ -813,6 +818,7 @@ def main():
       % (os.path.basename(a.rom), ' + '.join(os.path.basename(p) for p in a.profile), len(pcs), 100.0 * covered / total))
     w('#ifndef MD_RECOMP_H\n#define MD_RECOMP_H\n')
     w('#define RC_EXACT %d' % (1 if a.exact else 0))
+    w('#define RC_LOCALS %d' % (0 if a.no_locals else 1))
     w(PROLOGUE)
     leaders = sorted(lead)
     size = 1
@@ -851,7 +857,8 @@ def main():
     w('    };')
     w('    u32 pc_, h_;')
     w('    int cyc_;')
-    w('    u32 D0, D1, D2, D3, D4, D5, D6, D7, A0, A1, A2, A3, A4, A5, A6, A7, FX, FN, FZ, FV, FC;')
+    if not a.no_locals:
+        w('    u32 D0, D1, D2, D3, D4, D5, D6, D7, A0, A1, A2, A3, A4, A5, A6, A7, FX, FN, FZ, FV, FC;')
     w('    /* the CPU state through a base register: i960 loads/stores with a short offset are')
     w('     * half the size of absolute ones (GCC would otherwise fold the address back in) */')
     w('    m68k_t *M_;')
@@ -939,9 +946,12 @@ def main():
         l = out[i]
         if 'cyc_ = m68k.cycles;' in l or l.startswith('#'): continue
         l = l.replace('m68k.cycles', 'cyc_').replace('return 1;', 'RC_RET')
-        l = re.sub(r'm68k\.d\[(\d)\]', r'D\1', l)
-        l = re.sub(r'm68k\.a\[(\d)\]', r'A\1', l)
-        l = re.sub(r'm68k\.([xnzvc])\b', lambda m: 'F' + m.group(1).upper(), l)
+        if not a.no_locals:
+            l = re.sub(r'm68k\.d\[(\d)\]', r'D\1', l)
+            l = re.sub(r'm68k\.a\[(\d)\]', r'A\1', l)
+            l = re.sub(r'm68k\.([xnzvc])\b', lambda m: 'F' + m.group(1).upper(), l)
+        else:
+            l = l.replace('RC_LOAD;', '').replace('(*M_).x = FX;', '').replace('FN = (*M_).n; FZ = (*M_).z; FV = (*M_).v; FC = (*M_).c; FX = (*M_).x;', '')
         out[i] = l
     text = '\n'.join(out) + '\n'
     text = re.sub(r'\b(s32|s16|s8)\b', r'm68k_\1', text)      # the core's signed types
