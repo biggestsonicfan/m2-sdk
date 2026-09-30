@@ -59,16 +59,6 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-# m2emulator masks shift counts to 5 bits; GCC's i960 backend computes `x == 0` as
-# `shro x,1,y` (1 >> x), which then reads every non-zero multiple of 32 as zero.
-# tools/emu_shro.py rewrites those shifts in the compiler's assembly into sequences that
-# give the same result on silicon, MAME and m2emulator. -DM2_EMU_SHRO=OFF to skip it.
-option(M2_EMU_SHRO "Rewrite GCC's shro equality idiom for m2emulator" ON)
-if(M2_EMU_SHRO)
-    set_target_properties(game.elf PROPERTIES C_COMPILER_LAUNCHER
-        "${Python3_EXECUTABLE};${CMAKE_SOURCE_DIR}/tools/emu_shro.py")
-endif()
-
 # ROM image (raw binary, IMI/PRCB at offset 0) -> split into the program ROM pair.
 # Always-run target (not a POST_BUILD step): the sibling m2-snake build targets the
 # SAME sfight ROM pair, so every build must (re)stamp roms/ even when game.elf itself
@@ -78,18 +68,8 @@ add_custom_target(rom ALL
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/stfbin2rom.py"
             --input game.bin --output "${CMAKE_SOURCE_DIR}/roms"
-    # the sound program EPROM too (snd/scsp_passthru.bin: the i960 drives the SCSP), so
-    # roms/ holds a complete standalone set: sfight + these three files
-    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/snd2rom.py"
-            "${CMAKE_SOURCE_DIR}/snd/scsp_passthru.bin" "${CMAKE_SOURCE_DIR}/roms"
-    # and per game (not clobbered by other builds): the three EPROMs, and the flat image
-    # tools/m2_load.lua boots on a stock sfight romset
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}"
-    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/roms/epr-19001.15" "${CMAKE_SOURCE_DIR}/roms/epr-19002.16"
-            "${CMAKE_SOURCE_DIR}/roms/epr-19021.31" "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}/"
-    COMMAND ${CMAKE_COMMAND} -E copy game.bin "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}/game.bin"
     COMMAND ${CMAKE_COMMAND} -E echo
-            "BUILD OK (${M2_GAME}):  roms/${M2_GAME}/: epr-19001.15  epr-19002.16  epr-19021.31 (sound)  game.bin"
+            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16"
     DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)
@@ -100,17 +80,3 @@ add_custom_target(show-asm
     DEPENDS game.elf
     COMMENT "Disassembling ${M2_GAME} game.elf for i960-elf"
     VERBATIM)
-
-# ninja -C build snd   (re-assemble the sound board's 68000 program, snd/scsp_passthru.bin;
-# the .bin is committed, so this is only needed after editing snd/scsp_passthru.s)
-find_program(M68K_AS NAMES m68k-linux-gnu-as m68k-elf-as)
-find_program(M68K_LD NAMES m68k-linux-gnu-ld m68k-elf-ld)
-if(M68K_AS AND M68K_LD)
-    add_custom_target(snd
-        COMMAND ${M68K_AS} -m68000 -o scsp_passthru.o "${CMAKE_SOURCE_DIR}/snd/scsp_passthru.s"
-        COMMAND ${M68K_LD} -Ttext=0x600000 --oformat binary
-                -o "${CMAKE_SOURCE_DIR}/snd/scsp_passthru.bin" scsp_passthru.o
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        COMMENT "Assembling snd/scsp_passthru.s (68000 sound program)"
-        VERBATIM)
-endif()
