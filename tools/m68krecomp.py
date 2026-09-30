@@ -30,11 +30,12 @@ def load_rom(path):
 
 
 def load_cyc(path):
+    """src/m2_m68k_cyc.h: m68k_cyc_idx[1024] into m68k_cyc_blk[][64] -> 65536 values"""
     text = open(path).read()
-    body = text[text.index('{') + 1:text.rindex('}')]
-    v = [int(x) for x in re.findall(r'\d+', body)]
-    assert len(v) == 65536
-    return v
+    idx = [int(x) for x in re.findall(r'\d+', text[text.index('{') + 1:text.index('}')])]
+    blks = [[int(x) for x in b.split(',')] for b in re.findall(r'\{([\d,]+)\}', text[text.index('m68k_cyc_blk'):])]
+    assert len(idx) == 1024
+    return [blks[idx[op >> 6]][op & 63] for op in range(65536)]
 
 
 def load_profile(prefix):
@@ -112,16 +113,14 @@ class Insn:
                 w = 'md_ram[0x%x]' % ((a & 0xffff) >> 1)
                 if sz == 1: return '((u32)%s %s)' % (w, '& 0xffu' if a & 1 else '>> 8')
                 if sz == 2: return '(u32)' + w
-                if (a & 0xffff) == 0xfffe: return 'M68K_RD32(%s)' % hx(a)
+                if (a & 0xffff) == 0xfffe: return 'rc_rd32_o(%s, cyc_)' % hx(a)
                 return '(((u32)%s << 16) | md_ram[0x%x])' % (w, ((a & 0xffff) >> 1) + 1)
             if a + sz <= len(self.rom) * 2:
                 w = self.rom[a >> 1]
                 if sz == 1: return hx((w & 0xff) if a & 1 else w >> 8)
                 if sz == 2: return hx(w)
                 return hx((w << 16) | self.rom[(a >> 1) + 1])
-            if sz == 1: return 'md_rd_slow(%s, 0)' % hx(a)
-            if sz == 2: return 'md_rd_slow(%s, 1)' % hx(a)
-            return '((md_rd_slow(%s, 1) << 16) | md_rd_slow(%s, 1))' % (hx(a), hx(a + 2))
+            return 'rc_rd%d_o(%s, cyc_)' % (sz * 8, hx(a))
         return {1: 'rc_rd8(%s)', 2: 'rc_rd16(%s)', 4: 'rc_rd32(%s)'}[sz] % addr
 
     def wr(self, sz, addr, val, const=None):
@@ -133,17 +132,13 @@ class Insn:
                     if a & 1: self.emit('md_ram[0x%x] = (u16)((md_ram[0x%x] & 0xff00u) | ((%s) & 0xffu));' % (i, i, val))
                     else: self.emit('md_ram[0x%x] = (u16)((md_ram[0x%x] & 0x00ffu) | (((%s) & 0xffu) << 8));' % (i, i, val))
                 elif sz == 2: self.emit('md_ram[0x%x] = (u16)(%s);' % (i, val))
-                elif (a & 0xffff) == 0xfffe: self.emit('M68K_WR32(%s, %s);' % (hx(a), val))
+                elif (a & 0xffff) == 0xfffe: self.emit('RC_WR_O(32, %s, %s);' % (hx(a), val))
                 else:
                     v = self.var(val)
                     self.emit('md_ram[0x%x] = (u16)(%s >> 16); md_ram[0x%x] = (u16)%s;' % (i, v, i + 1, v))
                 return
             if a < 0x400000: return                  # ROM: ignored
-            if sz == 4:
-                v = self.var(val)
-                self.emit('md_wr_slow(%s, %s >> 16, 1); md_wr_slow(%s, %s & 0xffffu, 1);' % (hx(a), v, hx(a + 2), v))
-            else:
-                self.emit('md_wr_slow(%s, %s, %d);' % (hx(a), val, 1 if sz == 2 else 0))
+            self.emit('RC_WR_O(%d, %s, %s);' % (sz * 8, hx(a), val))
             return
         self.emit({1: 'rc_wr8(%s, %s);', 2: 'rc_wr16(%s, %s);', 4: 'rc_wr32(%s, %s);'}[sz] % (addr, val))
 
@@ -642,7 +637,9 @@ class Insn:
             if op & 0x800: raise Untranslated('bitfield')
             a, c = self.ea_addr(mode, reg, 2)
             d = self.var(self.rd(2, a, c))
+            self.emit('(*M_).x = FX;')
             r = self.var('rc_shift(%d, %d, %d, %s, 1)' % (2, (op >> 9) & 3, (op >> 8) & 1, d))
+            self.emit('FN = (*M_).n; FZ = (*M_).z; FV = (*M_).v; FC = (*M_).c; FX = (*M_).x;')
             self.wr(2, a, r, c)
             self.writes.update('xnzvc')
             if (op >> 9) & 3 == 2: self.reads.add('x')
@@ -677,28 +674,50 @@ class Insn:
             if 'c' in self.live or 'x' in self.live:
                 cv = self.var(cf); self.fl('c', cv); self.fl('x', cv)
             return
+        self.emit('(*M_).x = FX;')
         r = self.var('rc_shift(%d, %d, %d, m68k.d[%d], %s)' % (sz, typ, left, reg, cnt))
+        self.emit('FN = (*M_).n; FZ = (*M_).z; FV = (*M_).v; FC = (*M_).c; FX = (*M_).x;')
         self.setd(reg, sz, r)
 
 
 PROLOGUE = r"""
-/* the bus for addresses known only at run time: work RAM inline, the rest md_hw.h's */
-static inline __attribute__((always_inline)) u32 rc_rd8(u32 a) { return md_rd8(a); }
-static inline __attribute__((always_inline)) u32 rc_rd16(u32 a) { return md_rd16(a); }
-static inline __attribute__((always_inline)) u32 rc_rd32(u32 a) {
-    if ((a & 0xe00000) == 0xe00000 && (a & 0xffff) != 0xfffe) {
-        const u16 *p = &md_ram[(a & 0xffff) >> 1]; return ((u32)p[0] << 16) | p[1];
-    }
-    return M68K_RD32(a);
-}
-static inline __attribute__((always_inline)) void rc_wr8(u32 a, u32 v) { md_wr8(a, v); }
-static inline __attribute__((always_inline)) void rc_wr16(u32 a, u32 v) { md_wr16(a, v); }
-static inline __attribute__((always_inline)) void rc_wr32(u32 a, u32 v) {
-    if ((a & 0xe00000) == 0xe00000 && (a & 0xffff) != 0xfffe) {
-        u16 *p = &md_ram[(a & 0xffff) >> 1]; p[0] = (u16)(v >> 16); p[1] = (u16)v; return;
-    }
-    M68K_WR32(a, v);
-}
+/* Inside md_rc_run the cycle count lives in a register (cyc_). The slow bus gets it by
+ * value (the VDP's H counter reads it); a slow write returns 1 when it made an interrupt
+ * pending (a VDP register), and the run then stops at the next block end, its remaining
+ * cycles given back by md_run (md_cyc_owed). */
+#define RC_LOAD do { D0 = m68k.d[0]; D1 = m68k.d[1]; D2 = m68k.d[2]; D3 = m68k.d[3]; D4 = m68k.d[4]; \
+    D5 = m68k.d[5]; D6 = m68k.d[6]; D7 = m68k.d[7]; A0 = m68k.a[0]; A1 = m68k.a[1]; A2 = m68k.a[2]; \
+    A3 = m68k.a[3]; A4 = m68k.a[4]; A5 = m68k.a[5]; A6 = m68k.a[6]; A7 = m68k.a[7]; \
+    FX = m68k.x; FN = m68k.n; FZ = m68k.z; FV = m68k.v; FC = m68k.c; } while (0)
+#define RC_SAVE do { m68k.d[0] = D0; m68k.d[1] = D1; m68k.d[2] = D2; m68k.d[3] = D3; m68k.d[4] = D4; \
+    m68k.d[5] = D5; m68k.d[6] = D6; m68k.d[7] = D7; m68k.a[0] = A0; m68k.a[1] = A1; m68k.a[2] = A2; \
+    m68k.a[3] = A3; m68k.a[4] = A4; m68k.a[5] = A5; m68k.a[6] = A6; m68k.a[7] = A7; \
+    m68k.x = FX; m68k.n = FN; m68k.z = FZ; m68k.v = FV; m68k.c = FC; } while (0)
+/* the registers and flags live in locals while the run lasts: RC_RET puts them back */
+#define RC_RET { RC_SAVE; m68k.cycles = cyc_; return 1; }
+#define RC_WR_O(bits, a, v) do { if (rc_wr##bits##_o((a), (v), cyc_)) { md_cyc_owed += cyc_; cyc_ = 0; } } while (0)
+static __attribute__((noinline)) u32 rc_rd8_o(u32 a, int cyc) { m68k.cycles = cyc; return md_rd8(a); }
+static __attribute__((noinline)) u32 rc_rd16_o(u32 a, int cyc) { m68k.cycles = cyc; return md_rd16(a); }
+static __attribute__((noinline)) u32 rc_rd32_o(u32 a, int cyc) { m68k.cycles = cyc; return M68K_RD32(a); }
+static __attribute__((noinline)) int rc_wr8_o(u32 a, u32 v, int cyc) { m68k.cycles = cyc; md_irq_new = 0; md_wr8(a, v); return md_irq_new; }
+static __attribute__((noinline)) int rc_wr16_o(u32 a, u32 v, int cyc) { m68k.cycles = cyc; md_irq_new = 0; md_wr16(a, v); return md_irq_new; }
+static __attribute__((noinline)) int rc_wr32_o(u32 a, u32 v, int cyc) { m68k.cycles = cyc; md_irq_new = 0; M68K_WR32(a, v); return md_irq_new; }
+/* the bus for addresses known only at run time: work RAM and ROM inline */
+#define rc_rd8(a) ({ u32 a_ = (a); ((a_ & 0xe00000) == 0xe00000) ? (u32)(md_ram[(a_ & 0xffff) >> 1] >> ((~a_ & 1) << 3)) & 0xffu \
+    : (a_ & 0xffffff) < (MD_ROM_WORDS << 1) ? (u32)(md_rom[(a_ & 0xffffff) >> 1] >> ((~a_ & 1) << 3)) & 0xffu \
+    : rc_rd8_o(a_, cyc_); })
+#define rc_rd16(a) ({ u32 a_ = (a); ((a_ & 0xe00000) == 0xe00000) ? (u32)md_ram[(a_ & 0xffff) >> 1] \
+    : (a_ & 0xffffff) < (MD_ROM_WORDS << 1) ? (u32)md_rom[(a_ & 0xffffff) >> 1] : rc_rd16_o(a_, cyc_); })
+#define rc_rd32(a) ({ u32 a_ = (a); ((a_ & 0xe00000) == 0xe00000 && (a_ & 0xffff) != 0xfffe) \
+      ? ((u32)md_ram[(a_ & 0xffff) >> 1] << 16) | md_ram[((a_ & 0xffff) >> 1) + 1] : rc_rd32_o(a_, cyc_); })
+#define rc_wr8(a, v) do { u32 a_ = (a), v_ = (v); if ((a_ & 0xe00000) == 0xe00000) { u16 *p_ = &md_ram[(a_ & 0xffff) >> 1]; \
+    *p_ = (a_ & 1) ? (u16)((*p_ & 0xff00u) | (v_ & 0xffu)) : (u16)((*p_ & 0x00ffu) | ((v_ & 0xffu) << 8)); } \
+    else RC_WR_O(8, a_, v_); } while (0)
+#define rc_wr16(a, v) do { u32 a_ = (a), v_ = (v); if ((a_ & 0xe00000) == 0xe00000) md_ram[(a_ & 0xffff) >> 1] = (u16)v_; \
+    else RC_WR_O(16, a_, v_); } while (0)
+#define rc_wr32(a, v) do { u32 a_ = (a), v_ = (v); if ((a_ & 0xe00000) == 0xe00000 && (a_ & 0xffff) != 0xfffe) { \
+    u16 *p_ = &md_ram[(a_ & 0xffff) >> 1]; p_[0] = (u16)(v_ >> 16); p_[1] = (u16)v_; } \
+    else RC_WR_O(32, a_, v_); } while (0)
 /* the shifts the translation leaves to the core (sets the flags as the interpreter) */
 static __attribute__((noinline)) u32 rc_shift(int sz, int type, int left, u32 v, u32 cnt) {
     return m68k_shift(sz, type, left, v, cnt);
@@ -831,17 +850,21 @@ def main():
     if row: w('        ' + ', '.join(row) + ',')
     w('    };')
     w('    u32 pc_, h_;')
+    w('    int cyc_;')
+    w('    u32 D0, D1, D2, D3, D4, D5, D6, D7, A0, A1, A2, A3, A4, A5, A6, A7, FX, FN, FZ, FV, FC;')
     w('    /* the CPU state through a base register: i960 loads/stores with a short offset are')
     w('     * half the size of absolute ones (GCC would otherwise fold the address back in) */')
     w('    m68k_t *M_;')
     w('    __asm__("" : "=r"(M_) : "0"(&m68k));')
     w('#define m68k (*M_)')
     w('    pc_ = m68k.pc;')
+    w('    cyc_ = m68k.cycles;')
     w('    h_ = RC_HASH(pc_);')
     w('    while (rc_hash_pc[h_] != pc_) { if (rc_hash_pc[h_] == 0xffffffffu) return 0; h_ = (h_ + 1) & (RC_HASH_SIZE - 1); }')
+    w('    RC_LOAD;')
     w('    goto *lbl[rc_hash_idx[h_]];')
     w('dispatch:')
-    w('    if (m68k.cycles <= 0 || m68k_irq_pending()) { m68k.pc = pc_; return 1; }')
+    w('    if (m68k.cycles <= 0) { m68k.pc = pc_; return 1; }')
     w('    h_ = RC_HASH(pc_);')
     w('    while (rc_hash_pc[h_] != pc_) { if (rc_hash_pc[h_] == 0xffffffffu) { m68k.pc = pc_; return 1; } h_ = (h_ + 1) & (RC_HASH_SIZE - 1); }')
     w('    goto *lbl[rc_hash_idx[h_]];')
@@ -849,7 +872,7 @@ def main():
     def goto(target, acc_code):
         """jump to a constant target: charge, check, then goto or leave"""
         if target in lead:
-            return '%s pc_ = %s; if (m68k.cycles <= 0 || m68k_irq_pending()) { m68k.pc = pc_; return 1; } goto L_%06x;' % (acc_code, hx(target), target)
+            return '%s pc_ = %s; if (m68k.cycles <= 0) { m68k.pc = pc_; return 1; } goto L_%06x;' % (acc_code, hx(target), target)
         return '%s m68k.pc = %s; return 1;' % (acc_code, hx(target))
 
     idle_pc = None
@@ -873,7 +896,7 @@ def main():
         if k == 'seq':
             acc = cyc_now
             if a.exact:
-                w(line + ' m68k.cycles -= %d; } if (m68k.cycles <= 0 || m68k_irq_pending()) { m68k.pc = %s; return 1; }' % (acc, hx(nxt)))
+                w(line + ' m68k.cycles -= %d; } if (m68k.cycles <= 0) { m68k.pc = %s; return 1; }' % (acc, hx(nxt)))
                 acc = 0
                 if not falls: w('    m68k.pc = %s; return 1;' % hx(nxt))
                 continue
@@ -911,6 +934,15 @@ def main():
     w('#undef m68k')
     w('}')
     w('\n#endif')
+    fa = next(i for i, l in enumerate(out) if l.startswith('static int md_rc_run'))
+    for i in range(fa + 1, len(out)):
+        l = out[i]
+        if 'cyc_ = m68k.cycles;' in l or l.startswith('#'): continue
+        l = l.replace('m68k.cycles', 'cyc_').replace('return 1;', 'RC_RET')
+        l = re.sub(r'm68k\.d\[(\d)\]', r'D\1', l)
+        l = re.sub(r'm68k\.a\[(\d)\]', r'A\1', l)
+        l = re.sub(r'm68k\.([xnzvc])\b', lambda m: 'F' + m.group(1).upper(), l)
+        out[i] = l
     text = '\n'.join(out) + '\n'
     text = re.sub(r'\b(s32|s16|s8)\b', r'm68k_\1', text)      # the core's signed types
     with open(a.out, 'w') as f: f.write(text)

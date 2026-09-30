@@ -16,6 +16,7 @@
  *   -P prefix    profile: write prefix.op (65536 x u32 executions per opcode),
  *                prefix.pc (8M x u32 executions per word address) and prefix.ent (8M x u32
  *                arrivals by a jump, branch, return or interrupt), for tools/m68krecomp.py
+ *   -A           with -P: add to the prefix's files if they exist (one profile, many runs)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +69,7 @@ int main(int argc, char **argv) {
     int frames = 600, i, f, stats = 0;
     int pf[64], np = 0, inf[256], ni = 0;
     const char *pp[64], *ramout = 0, *sumout = 0, *profout = 0;
+    int accum = 0;
     unsigned long long fmax = 0;
     u8 inv[256];
     FILE *sums = 0;
@@ -86,10 +88,19 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-m") && i + 1 < argc) sumout = argv[++i];
         else if (!strcmp(argv[i], "-s")) stats = 1;
         else if (!strcmp(argv[i], "-P") && i + 1 < argc) profout = argv[++i];
+        else if (!strcmp(argv[i], "-A")) accum = 1;
         else { fprintf(stderr, "usage: see tools/mdhost.c\n"); return 2; }
     }
     if (sumout && !(sums = fopen(sumout, "w"))) { perror(sumout); return 1; }
-    if (profout) { prof_op = calloc(65536, 4); prof_pc = calloc(1 << 23, 4); prof_ent = calloc(1 << 23, 4); }
+    if (profout) {
+        prof_op = calloc(65536, 4); prof_pc = calloc(1 << 23, 4); prof_ent = calloc(1 << 23, 4);
+        if (accum) {
+            char n[512]; FILE *o;
+            snprintf(n, sizeof n, "%s.op", profout); if ((o = fopen(n, "rb"))) { if (fread(prof_op, 4, 65536, o)) {} fclose(o); }
+            snprintf(n, sizeof n, "%s.pc", profout); if ((o = fopen(n, "rb"))) { if (fread(prof_pc, 4, 1 << 23, o)) {} fclose(o); }
+            snprintf(n, sizeof n, "%s.ent", profout); if ((o = fopen(n, "rb"))) { if (fread(prof_ent, 4, 1 << 23, o)) {} fclose(o); }
+        }
+    }
     md_reset();
     t0 = clock();
     for (f = 1; f <= frames; f++) {

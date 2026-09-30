@@ -43,7 +43,7 @@ static u16 md_fill_len;
 static u8  md_irq6_pending, md_irq4_pending, md_vblank;
 static int md_irq4counter = -1;
 static int md_line;                     /* current scanline, 0-261 */
-static int md_line_start;               /* m68k.cycles when the line began (for the H counter) */
+static int md_seg_line, md_seg_start;   /* the 68000's slice: first line, m68k.cycles as it began */
 
 /* what changed, for the host's renderer: patterns (2048 x 32 bytes), colours */
 static u32 md_tile_dirty[2048 / 32];
@@ -102,10 +102,15 @@ static int md_irq_ack(int level);
 /* ---- interrupts ------------------------------------------------------------------------ */
 /* MAME: the level-6 line is up while a VINT is pending and register 1 enables it; the
  * level-4 line likewise for HINT and register 0. The acknowledge clears VINT first. */
+static int md_cyc_owed;                 /* the slice's cycles, put aside for an interrupt */
+static u8  md_irq_new;                  /* an interrupt became takeable (md_update_irq) */
 static inline void md_update_irq(void) {
     if (md_irq6_pending && (md_reg[1] & 0x20)) m68k.irq = 6;
     else if (md_irq4_pending && (md_reg[0] & 0x10)) m68k.irq = 4;
     else m68k.irq = 0;
+    /* an interrupt the 68000 will take (a VDP register write enabled it): the recompiled
+     * code, which only checks its cycles, sets them aside and stops (md_cyc_owed) */
+    if (m68k_irq_pending()) md_irq_new = 1;
 }
 static int md_irq_ack(int level) {
     if (md_irq6_pending && (md_reg[1] & 0x20)) md_irq6_pending = 0;
@@ -140,7 +145,7 @@ static u16 md_dma_src_word(u32 a) {
     return 0;
 }
 
-static void md_dma(void) {
+static __attribute__((noinline)) void md_dma(void) {
     u32 type = md_reg[23] >> 6;
     if (!(md_reg[1] & 0x10)) return;                    /* DMA disabled */
     if (type < 2) {                                     /* 68000 -> VRAM / CRAM / VSRAM */
@@ -148,7 +153,24 @@ static void md_dma(void) {
         u32 len = ((u32)md_reg[19] | ((u32)md_reg[20] << 8)) << 1, n;
         u32 code = md_vcode & 0xf;
         if (len == 0) len = 0xffff;
-        for (n = 0; n < (len >> 1); n++) {
+        n = 0;
+        /* the usual case, a block to VRAM with increment 2: a plain copy, tiles marked once */
+        if (code == 1 && md_reg[15] == 2 && !(md_vaddr & 1)) {
+            u32 cnt = len >> 1, a0 = md_vaddr, k;
+            const u16 *sp = 0;
+            if (src + len <= (MD_ROM_WORDS << 1)) sp = &md_rom[src >> 1];
+            else if (src >= 0xe00000 && (src & 0xffff) + len <= 0x10000) sp = &md_ram[(src & 0xffff) >> 1];
+            if (sp && a0 + len <= 0x10000) {
+                u16 *dp = &md_vram[a0 >> 1];
+                for (k = 0; k < cnt; k++) dp[k] = sp[k];
+                for (k = a0 >> 5; k <= (a0 + len - 1) >> 5; k++) md_tile_dirty[k >> 5] |= 1u << (k & 31);
+                md_tile_any = 1;
+                md_vaddr = (u16)(a0 + cnt * 2);
+                src += cnt * 2;
+                n = cnt;
+            }
+        }
+        for (; n < (len >> 1); n++) {
             u16 w = md_dma_src_word(src);
             if (code == 1) md_vram_w(w);
             else if (code == 3) md_cram_w(w);
@@ -240,12 +262,17 @@ static u16 md_data_r(void) {
 }
 
 /* the 68000's position in the line, 0-487 cycles -> MAME's H position (0-479) */
-static inline u32 md_hpos(void) {
-    int c = md_line_start - m68k.cycles;             /* cycles run since the line began */
+/* where the beam is, from the 68000's cycles into its slice: the line, and MAME's H
+ * position (0-479). Divides, but only for the few status / HV counter reads. */
+static u32 md_hpos_line(int *line) {
+    int c = md_seg_start - m68k.cycles;
+    u32 mc;
     if (c < 0) c = 0;
-    if (c > 488) c = 488;
-    return (u32)c * 480u / 489u;
+    mc = (u32)c * 7u;                                /* master clocks */
+    *line = md_seg_line + (int)(mc / MD_MCLK_LINE);
+    return (mc % MD_MCLK_LINE) * 480u / MD_MCLK_LINE;
 }
+static inline u32 md_hpos(void) { int l; return md_hpos_line(&l); }
 
 static u16 md_status_r(void) {
     u32 h = md_hpos();
@@ -257,8 +284,8 @@ static u16 md_status_r(void) {
 }
 
 static u16 md_hv_r(void) {
-    int v = md_line;
-    u32 h = md_hpos();
+    int v;
+    u32 h = md_hpos_line(&v);
     if (h > 460) v++;
     v %= MD_LINES;
     if (v > 0xea) v -= 6;                               /* vc_ntsc_224: 0x00-0xEA, then 0xE5.. */
@@ -426,7 +453,7 @@ static void md_reset(void) {
 static u32 md_frames;
 static u32 md_cyc_frac;                 /* master clocks not yet given to the 68000 */
 
-static void md_line_events(int line) {
+static __attribute__((noinline)) void md_line_events(int line) {
     if (line == MD_VIS_LINES) { md_irq6_pending = 1; md_vblank = 1; }
     if (line <= MD_VIS_LINES) {
         if (--md_irq4counter == -1) {
@@ -437,30 +464,45 @@ static void md_line_events(int line) {
     md_update_irq();
 }
 
-static void md_frame(void) {
-    int line;
+/* run the 68000 for `cyc` cycles from the start of line `line0` */
+static void md_run(int cyc, int line0) {
+    if (md_idle && !m68k_irq_pending()) return;   /* spinning in WaitForVBla: skip ahead */
+    md_idle = 0;
+    m68k.cycles += cyc;
+    md_seg_line = line0; md_seg_start = m68k.cycles;
+    for (;;) {
+        if (m68k.cycles <= 0) {
+            if (!md_cyc_owed) break;
+            m68k.cycles += md_cyc_owed; md_cyc_owed = 0;
+        }
+        if (m68k_irq_pending()) { MD_INTERRUPT(); md_idle = 0; }
+        if (m68k.stopped) { m68k.cycles = 0; md_cyc_owed = 0; break; }
+#ifdef MD_RECOMP
+        if (!md_rc_run()) MD_STEP();
+#else
+        MD_STEP();
+#endif
+    }
+}
+
+/* One frame: the VDP's line events for each line (VINT at 224, the HINT counter), the
+ * 68000 in between. Only the events that can raise an interrupt need the 68000 to have
+ * got there, so it runs in two slices, lines 0-223 and 224-261, or a line at a time
+ * while HINT is enabled (Labyrinth Zone's water line). */
+static __attribute__((noinline)) void md_frame(void) {
+    int line, pend = 0, seg = 0;
     md_vblank = 0;
     md_frames++;
     for (line = 0; line < MD_LINES; line++) {
-        int cyc;
+        int cyc = 488;                                /* 3420 / 7 = 488 4/7 */
+        if (pend && (line == MD_VIS_LINES || (md_reg[0] & 0x10))) { md_run(pend, seg); pend = 0; seg = line; }
         md_line = line;
         md_line_events(line);
-        md_cyc_frac += MD_MCLK_LINE;
-        cyc = (int)(md_cyc_frac / 7); md_cyc_frac -= (u32)cyc * 7;
-        if (md_idle && !m68k_irq_pending()) continue;   /* spinning in WaitForVBla: skip the line */
-        md_idle = 0;
-        m68k.cycles += cyc;
-        md_line_start = m68k.cycles;
-        while (m68k.cycles > 0) {
-            if (m68k_irq_pending()) { MD_INTERRUPT(); md_idle = 0; }
-            if (m68k.stopped) { m68k.cycles = 0; break; }
-#ifdef MD_RECOMP
-            if (!md_rc_run()) MD_STEP();
-#else
-            MD_STEP();
-#endif
-        }
+        md_cyc_frac += MD_MCLK_LINE - 488 * 7;
+        if (md_cyc_frac >= 7) { md_cyc_frac -= 7; cyc++; }
+        pend += cyc;
     }
+    md_run(pend, seg);
 }
 
 #endif /* MD_HW_H */

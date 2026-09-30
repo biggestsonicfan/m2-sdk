@@ -21,7 +21,7 @@
  *
  * Behaviour and timing follow Musashi (Karl Stenerud's 68000 core, MAME's 68000 for years),
  * instruction for instruction: flags, the undefined BCD flags, and the cycle counts
- * (tools/m68k_cyc.py derives src/m2_m68k_cyc.h, the per-opcode base times, from it;
+ * (tools/m68k_cyc.c derives src/m2_m68k_cyc.h, the per-opcode base times, from it;
  * tools/mdlock.c checks this core against it one instruction at a time). No address
  * errors, no trace mode, no prefetch.
  *
@@ -30,7 +30,7 @@
 #ifndef M2_M68K_H
 #define M2_M68K_H
 
-#include "m2_m68k_cyc.h"               /* m68k_cyc[65536]: base cycles per opcode */
+#include "m2_m68k_cyc.h"               /* M68K_CYC(op): base cycles per opcode */
 
 #define M68K_INL static inline __attribute__((always_inline))
 
@@ -481,7 +481,7 @@ static void m68k_step(void) {
     m68k.ir = op;
     m68k.ppc = m68k.pc;
     m68k.pc += 2;
-    m68k.cycles -= m68k_cyc[op];
+    m68k.cycles -= M68K_CYC(op);
 
     switch (op >> 12) {
     case 0x0:

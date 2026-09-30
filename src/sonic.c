@@ -41,7 +41,7 @@ static u32 md_insns;                    /* 68000 instructions run (the panel's s
 
 #define MD_HZ    59923u                 /* Mega Drive NTSC frame rate, mHz (53.693175 MHz / 3420 / 262) */
 #define M2_HZ    57524u                 /* Model 2 vblank rate, mHz (16 MHz / 656 / 424) */
-#define MD_MAX_SKIP 3                   /* draw at least every 4th vblank */
+#define MD_CATCH_UP 4                   /* Mega Drive frames run at most between two pictures */
 
 /* The tile palette goes through the colour-translation table: each 5-bit channel c reads
  * colorxlat row c, pen 0x40 (MAME sega/model2.cpp palette_w). m2_init's table saturates
@@ -88,8 +88,7 @@ static void num(char *s, u32 v, int w) {
 }
 
 int main(void) {
-    u32 last, t0, frames = 0, tick = 0, ins0 = 0;
-    int late = 0, skipped = 0;
+    u32 seen, t0, frames = 0, draws = 0, tick = 0, due = 0, ins0 = 0;
     char buf[12];
 
     m2_init();
@@ -104,19 +103,33 @@ int main(void) {
     s24_text(11, 5, "68000 ON I960");
 #endif
     s24_text(11, 40, "SPEED");
-    s24_text(28, 40, "68K/FRAME");
+    s24_text(28, 40, "DRAWN/S");
     s24_text(11, 42, "68K K");
     s24_text(28, 42, "VIDEO K");
+    s24_text(11, 44, "68K/FRAME");
     M2_TIMER3 = 0xffffffffu;
 
-    last = t0 = frameVBL;
+    seen = t0 = frameVBL;
     for (;;) {
-        /* the Mega Drive runs at 59.92 Hz, the Model 2 refreshes at 57.52 Hz: about every
-         * 24th vblank runs two Mega Drive frames. Frameskip as pacman.c: after a vblank
-         * that overran, the next one skips drawing (at most MD_MAX_SKIP in a row). */
-        int render = !(late && skipped < MD_MAX_SKIP), n, k;
-        tick += MD_HZ;
-        for (n = 0; tick >= M2_HZ; n++) tick -= M2_HZ;
+        u32 n, k;
+        /* The Mega Drive runs at 59.92 Hz, the Model 2 refreshes at 57.52 Hz: each vblank
+         * makes 1.04 Mega Drive frames due. Run what is due (up to MD_CATCH_UP at once, the
+         * rest is dropped: the game then slows down), and draw once after them, so a busy
+         * stretch draws fewer pictures instead of running slow. */
+        while (seen != frameVBL) {
+            seen++;
+            tick += MD_HZ;
+            while (tick >= M2_HZ) { tick -= M2_HZ; due++; }
+        }
+        if (!due) {
+#ifndef SONIC_BENCH                     /* -DSONIC_BENCH: flat out, SPEED shows the headroom */
+            continue;
+#else
+            due = 1;
+#endif
+        }
+        n = due > MD_CATCH_UP ? MD_CATCH_UP : due;
+        due = 0;
         for (k = 0; k < n; k++) {
             u32 t = M2_TIMER3;
             sonic_read_inputs();
@@ -124,24 +137,19 @@ int main(void) {
             t_cpu += t - M2_TIMER3;
             frames++;
         }
-        if (render && n) { u32 t = M2_TIMER3; s24_update(); t_vid += t - M2_TIMER3; }
-        skipped = render ? 0 : skipped + 1;
-        late = frameVBL != last;
-#ifndef SONIC_BENCH                     /* -DSONIC_BENCH: flat out, SPEED shows the headroom */
-        while (frameVBL == last) { }
-#endif
-        last = frameVBL;
-        if (last - t0 >= 60) {          /* speed = emulated frames against real Mega Drive time */
-            num(buf, frames * (100000u * (M2_HZ / 8u) / (MD_HZ / 8u)) / ((last - t0) * 1000u), 3);
+        { u32 t = M2_TIMER3; s24_update(); t_vid += t - M2_TIMER3; draws++; }
+        if (frameVBL - t0 >= 60) {      /* speed = emulated frames against real Mega Drive time */
+            u32 el = frameVBL - t0;
+            num(buf, frames * (100000u * (M2_HZ / 8u) / (MD_HZ / 8u)) / (el * 1000u), 3);
             buf[3] = '%'; buf[4] = 0;
             s24_text(17, 40, buf);
-            num(buf, (md_insns - ins0) / (frames ? frames : 1), 6);
-            s24_text(38, 40, buf);
-            /* i960 cycles per Mega Drive frame, in thousands (417 = all of it at 59.92 Hz) */
+            num(buf, draws * M2_HZ / (el * 1000u), 3); s24_text(38, 40, buf);
+            /* i960 cycles per Mega Drive frame / per picture, in thousands (417 = all of it) */
             num(buf, t_cpu / 1000u / (frames ? frames : 1), 4); s24_text(17, 42, buf);
-            num(buf, t_vid / 1000u / (frames ? frames : 1), 4); s24_text(38, 42, buf);
+            num(buf, t_vid / 1000u / (draws ? draws : 1), 4); s24_text(38, 42, buf);
+            num(buf, (md_insns - ins0) / (frames ? frames : 1), 6); s24_text(21, 44, buf);
             M2_TIMER3 = 0xffffffffu;
-            frames = 0; t0 = last; ins0 = md_insns; t_cpu = t_vid = 0;
+            frames = draws = 0; t0 = frameVBL; ins0 = md_insns; t_cpu = t_vid = 0;
         }
     }
 }
