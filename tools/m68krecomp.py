@@ -741,9 +741,10 @@ def main():
     ap.add_argument('out')
     ap.add_argument('-p', '--profile', action='append', required=True)
     ap.add_argument('--cyc', default=os.path.join(os.path.dirname(__file__), '..', 'src', 'm2_m68k_cyc.h'))
-    ap.add_argument('--budget', type=int, default=4000, help='instructions to translate (the most run)')
+    ap.add_argument('--budget', type=int, default=4300, help='instructions to translate (the most run)')
     ap.add_argument('--exact', action='store_true', help='end the run after any instruction, as the interpreter')
-    ap.add_argument('--no-locals', action='store_true', help='keep the 68000 registers in the m68k struct')
+    ap.add_argument('--locals', action='store_true',
+                    help='the 68000 registers and flags in C locals (4%% faster, 20%% more code)')
     a = ap.parse_args()
 
     rom = load_rom(a.rom)
@@ -818,7 +819,7 @@ def main():
       % (os.path.basename(a.rom), ' + '.join(os.path.basename(p) for p in a.profile), len(pcs), 100.0 * covered / total))
     w('#ifndef MD_RECOMP_H\n#define MD_RECOMP_H\n')
     w('#define RC_EXACT %d' % (1 if a.exact else 0))
-    w('#define RC_LOCALS %d' % (0 if a.no_locals else 1))
+    w('#define RC_LOCALS %d' % (0 if (not a.locals) else 1))
     w(PROLOGUE)
     leaders = sorted(lead)
     size = 1
@@ -857,7 +858,7 @@ def main():
     w('    };')
     w('    u32 pc_, h_;')
     w('    int cyc_;')
-    if not a.no_locals:
+    if not (not a.locals):
         w('    u32 D0, D1, D2, D3, D4, D5, D6, D7, A0, A1, A2, A3, A4, A5, A6, A7, FX, FN, FZ, FV, FC;')
     w('    /* the CPU state through a base register: i960 loads/stores with a short offset are')
     w('     * half the size of absolute ones (GCC would otherwise fold the address back in) */')
@@ -946,7 +947,7 @@ def main():
         l = out[i]
         if 'cyc_ = m68k.cycles;' in l or l.startswith('#'): continue
         l = l.replace('m68k.cycles', 'cyc_').replace('return 1;', 'RC_RET')
-        if not a.no_locals:
+        if not (not a.locals):
             l = re.sub(r'm68k\.d\[(\d)\]', r'D\1', l)
             l = re.sub(r'm68k\.a\[(\d)\]', r'A\1', l)
             l = re.sub(r'm68k\.([xnzvc])\b', lambda m: 'F' + m.group(1).upper(), l)
