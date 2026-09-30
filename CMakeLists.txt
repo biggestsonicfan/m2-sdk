@@ -59,6 +59,16 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+# m2emulator masks shift counts to 5 bits; GCC's i960 backend computes `x == 0` as
+# `shro x,1,y` (1 >> x), which then reads every non-zero multiple of 32 as zero.
+# tools/emu_shro.py rewrites those shifts in the compiler's assembly into sequences that
+# give the same result on silicon, MAME and m2emulator. -DM2_EMU_SHRO=OFF to skip it.
+option(M2_EMU_SHRO "Rewrite GCC's shro equality idiom for m2emulator" ON)
+if(M2_EMU_SHRO)
+    set_target_properties(game.elf PROPERTIES C_COMPILER_LAUNCHER
+        "${Python3_EXECUTABLE};${CMAKE_SOURCE_DIR}/tools/emu_shro.py")
+endif()
+
 # ROM image (raw binary, IMI/PRCB at offset 0) -> split into the program ROM pair.
 # Always-run target (not a POST_BUILD step): the sibling m2-snake build targets the
 # SAME sfight ROM pair, so every build must (re)stamp roms/ even when game.elf itself

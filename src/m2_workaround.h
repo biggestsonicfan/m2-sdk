@@ -25,6 +25,13 @@
  *   - MAME HLE GEO renders direct_data; m2emu + silicon do not (m2_geo.h).
  *   - m2emu crashes on a vblank IRQ inside a deep soft-float chain (register-cache
  *     spill) — keep per-frame float out of IRQ windows (m2_geo.h geo_quad_matrix note).
+ *   - m2emu masks shift counts to 5 bits (an i960 shift by 32+ gives 0). GCC's i960
+ *     `x == 0` is `shro x,1,y`, so any non-zero multiple of 32 tested as zero (Pac-Man's
+ *     Z80 flag tables: Z set for 0x20, 0x40, ...). Build-level: tools/emu_shro.py, the
+ *     compiler launcher CMakeLists.txt installs (M2_EMU_SHRO, default ON).
+ *   - m2emu's sound UART (0x9C0004) always reads 0x07 (RxRDY set) and its data 0xFF, and
+ *     nothing sent reaches the sound board: bound every RX drain (m2_scsp_probe), and
+ *     the scsp_passthru sound path is silent there.
  *
  * ---- shim 1: m2emu MEMB-decoder hole -----------------------------------------------
  * m2emu's instruction decoder rejects some 2-word MEMB absolute-displacement forms
