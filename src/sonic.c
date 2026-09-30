@@ -28,6 +28,7 @@
 static u32 md_insns;                    /* 68000 instructions run (the panel's statistics) */
 #if __has_include("sonic_recomp.h") && !defined(SONIC_NO_RECOMP)
 #define SONIC_RECOMP 1
+#define MD_RECOMP "sonic_recomp.h"      /* tools/m68krecomp.py: md_rc_run ahead of the interpreter */
 #endif
 #define MD_INTERRUPT() m68k_interrupt()
 #define MD_STEP()      (md_insns++, m68k_step())
@@ -75,6 +76,11 @@ static void sonic_read_inputs(void) {
     md_pad[0] = pad;
 }
 
+/* Model 2 timer 3 (MAME sega/model2.cpp timers_r: counts down at 25 MHz, the i960's clock):
+ * the panel's split of the i960's time between the 68000 and the video */
+#define M2_TIMER3 (*(volatile u32 *)0x00f0000cu)
+static u32 t_cpu, t_vid;
+
 static void num(char *s, u32 v, int w) {
     int i;
     for (i = w - 1; i >= 0; i--) { s[i] = (char)(v ? '0' + v % 10 : (i == w - 1 ? '0' : ' ')); v /= 10; }
@@ -99,6 +105,9 @@ int main(void) {
 #endif
     s24_text(11, 40, "SPEED");
     s24_text(28, 40, "68K/FRAME");
+    s24_text(11, 42, "68K K");
+    s24_text(28, 42, "VIDEO K");
+    M2_TIMER3 = 0xffffffffu;
 
     last = t0 = frameVBL;
     for (;;) {
@@ -109,11 +118,13 @@ int main(void) {
         tick += MD_HZ;
         for (n = 0; tick >= M2_HZ; n++) tick -= M2_HZ;
         for (k = 0; k < n; k++) {
+            u32 t = M2_TIMER3;
             sonic_read_inputs();
             md_frame();
+            t_cpu += t - M2_TIMER3;
             frames++;
         }
-        if (render && n) s24_update();
+        if (render && n) { u32 t = M2_TIMER3; s24_update(); t_vid += t - M2_TIMER3; }
         skipped = render ? 0 : skipped + 1;
         late = frameVBL != last;
 #ifndef SONIC_BENCH                     /* -DSONIC_BENCH: flat out, SPEED shows the headroom */
@@ -126,7 +137,11 @@ int main(void) {
             s24_text(17, 40, buf);
             num(buf, (md_insns - ins0) / (frames ? frames : 1), 6);
             s24_text(38, 40, buf);
-            frames = 0; t0 = last; ins0 = md_insns;
+            /* i960 cycles per Mega Drive frame, in thousands (417 = all of it at 59.92 Hz) */
+            num(buf, t_cpu / 1000u / (frames ? frames : 1), 4); s24_text(17, 42, buf);
+            num(buf, t_vid / 1000u / (frames ? frames : 1), 4); s24_text(38, 42, buf);
+            M2_TIMER3 = 0xffffffffu;
+            frames = 0; t0 = last; ins0 = md_insns; t_cpu = t_vid = 0;
         }
     }
 }

@@ -390,6 +390,12 @@ static inline __attribute__((always_inline)) void md_wr8(u32 a, u32 v) {
     md_wr_slow(a, v, 0);
 }
 
+/* MD_RECOMP names a header from tools/m68krecomp.py (e.g. "sonic_recomp.h"): the hot code
+ * statically recompiled into md_rc_run, which runs ahead of the interpreter */
+#ifdef MD_RECOMP
+#include MD_RECOMP
+#endif
+
 static void md_find_idle(void) {
     u32 i;
     md_idle_pc = 0xffffffffu;
@@ -448,7 +454,11 @@ static void md_frame(void) {
         while (m68k.cycles > 0) {
             if (m68k_irq_pending()) { MD_INTERRUPT(); md_idle = 0; }
             if (m68k.stopped) { m68k.cycles = 0; break; }
+#ifdef MD_RECOMP
+            if (!md_rc_run()) MD_STEP();
+#else
             MD_STEP();
+#endif
         }
     }
 }

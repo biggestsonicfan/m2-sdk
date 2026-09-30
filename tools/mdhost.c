@@ -13,8 +13,9 @@
  *   -r out.bin   write 68000 RAM (64 KB, big-endian) after the last frame
  *   -m out.txt   write a per-frame RAM checksum (lockstep with MAME: tools/mdref.lua)
  *   -s           print statistics: 68000 instructions per frame, idle lines
- *   -P prefix    profile: write prefix.op (65536 x u32 executions per opcode) and
- *                prefix.pc (8M x u32 executions per word address), for tools/m68kgen.py
+ *   -P prefix    profile: write prefix.op (65536 x u32 executions per opcode),
+ *                prefix.pc (8M x u32 executions per word address) and prefix.ent (8M x u32
+ *                arrivals by a jump, branch, return or interrupt), for tools/m68krecomp.py
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +26,8 @@ typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32;
 
 static unsigned long long md_insns;
 static u32 *prof_op, *prof_pc;          /* -P: executions per opcode and per PC */
+static u32 *prof_ent;                   /* ... and arrivals at a PC other than by falling through */
+static u32 prof_next = 0xffffffffu;     /* where the last instruction would fall through to */
 static void prof_step(void);
 #define MD_INTERRUPT() m68k_interrupt()
 #define MD_STEP()      (md_insns++, prof_op ? prof_step() : m68k_step())
@@ -32,9 +35,18 @@ static void prof_step(void);
 #include "md_render.h"
 
 static void prof_step(void) {
-    prof_pc[(m68k.pc & 0xffffff) >> 1]++;
-    prof_op[md_rd16(m68k.pc)]++;
+    u32 pc = m68k.pc & 0xffffff, op = md_rd16(pc);
+    prof_pc[pc >> 1]++;
+    prof_op[op]++;
+    if (pc != prof_next) prof_ent[pc >> 1]++;
     m68k_step();
+    /* where falling through goes: the next instruction, unless this one can jump */
+    if ((op & 0xf000) == 0x6000)                             /* Bcc/BRA/BSR: not taken? */
+        prof_next = (op & 0xff00) >= 0x0200 + 0x6000 ? pc + ((op & 0xff) ? 2 : 4) : 0xffffffffu;
+    else if ((op & 0xf0f8) == 0x50c8) prof_next = pc + 4;    /* DBcc */
+    else if ((op & 0xff80) == 0x4e80 || (op & 0xfff0) == 0x4e40 || op == 0x4e73 || op == 0x4e75
+             || op == 0x4e77 || op == 0x4e72) prof_next = 0xffffffffu;   /* JSR JMP TRAP RTE RTS RTR STOP */
+    else prof_next = m68k.pc;
 }
 
 static void write_ppm(const char *path) {
@@ -77,7 +89,7 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "usage: see tools/mdhost.c\n"); return 2; }
     }
     if (sumout && !(sums = fopen(sumout, "w"))) { perror(sumout); return 1; }
-    if (profout) { prof_op = calloc(65536, 4); prof_pc = calloc(1 << 23, 4); }
+    if (profout) { prof_op = calloc(65536, 4); prof_pc = calloc(1 << 23, 4); prof_ent = calloc(1 << 23, 4); }
     md_reset();
     t0 = clock();
     for (f = 1; f <= frames; f++) {
@@ -104,6 +116,7 @@ int main(int argc, char **argv) {
         char n[512]; FILE *o;
         snprintf(n, sizeof n, "%s.op", profout); o = fopen(n, "wb"); fwrite(prof_op, 4, 65536, o); fclose(o);
         snprintf(n, sizeof n, "%s.pc", profout); o = fopen(n, "wb"); fwrite(prof_pc, 4, 1 << 23, o); fclose(o);
+        snprintf(n, sizeof n, "%s.ent", profout); o = fopen(n, "wb"); fwrite(prof_ent, 4, 1 << 23, o); fclose(o);
     }
     printf("busiest frame: %llu instructions\n", fmax);
     printf("%d frames, %llu instructions (%.0f/frame), %.2f s host\n", frames, md_insns,
