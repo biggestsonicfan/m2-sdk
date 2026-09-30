@@ -42,8 +42,9 @@ M2_API void m2_scsp_init(void) {
  * program ignores that byte) and waits up to `vblanks` frames for its 0x5A. Call before
  * sending anything else: to a game's program the packets would be MIDI notes. */
 M2_API int m2_scsp_probe(u32 vblanks) {
-    u32 t0 = frameVBL, sent = frameVBL - 8u;
-    while (M2_SND_CTL & 0x02u) (void)M2_SND_DATA;            /* drop stale RX bytes */
+    u32 t0 = frameVBL, sent = frameVBL - 8u, i;
+    /* drop stale RX bytes; bounded: m2emulator's UART always reads RxRDY (status 0x07) */
+    for (i = 0; i < 16u && (M2_SND_CTL & 0x02u); i++) (void)M2_SND_DATA;
     while (frameVBL - t0 < vblanks) {
         if (frameVBL - sent >= 8u && (M2_SND_CTL & 0x01u)) {  /* re-ping every 8 frames */
             M2_SND_DATA = 0xF0u;
