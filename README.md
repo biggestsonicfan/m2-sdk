@@ -90,6 +90,14 @@ build, so it runs on **m2emulator** and real hardware (and MAME under
 renders under MAME's HLE-off but did **not** display on m2emulator — `m2_obj.h`
 object_data is the portable silicon path (as m2-snake's `-DM2_HW` profile uses).
 
+`src/fpround.c` is a CPU test, not a demo (`-DM2_GAME=fpround`): it runs `cvtri`,
+`cvtril`, `roundr` and `roundrl` (inline asm, the i960KB's own FPU) on exact `.5` ties
+and prints PASS/FAIL per case on the tile layer and the aux UART. Intel's manual says
+round-to-nearest takes a tie to the even integer; MAME's i960 core used C `round()`
+(away from zero) until [biggestsonicfan/mame#1](https://github.com/biggestsonicfan/mame/issues/1).
+Real hardware should show `ALL PASS`; an unfixed MAME fails the 11 ties marked `*` and
+passes the 6 controls. m2emulator has no FPU, so it faults there.
+
 ### Performance: soft-float vs the COP
 
 Per-frame transform math (rotating vertices/columns) is the usual hot spot: under the
