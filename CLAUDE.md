@@ -41,6 +41,10 @@ usable FPU). The rules:
 - **2D pixel-coord shapes/text on silicon → `m2_draw.h`/`m2_text.h`** (DIRECT-FIFO cmd
   `0x01000202`; proven by Pong). `m2_frame_begin` → `m2_draw_frame_setup()`
   (render-state ONCE/frame) → `m2_fill_rect`/`m2_draw_text_px`/… → `m2_frame_commit`.
+- **Sprites (indexed images) → `m2_sprite.h`**: textured DIRECT quads, one per pen;
+  `m2_spr_frame_setup()` once/frame → `m2_spr_draw(...)`. Overlap needs polygon attr
+  bit 10 (sort by nearest z): plain `GEO_POLY_QUAD` sorts every quad into one bucket.
+  Example `src/spritedemo.c`.
 - **Pacing:** `m2_frame_commit()`+`m2_vsync()` = 60fps; `m2_frame_end()` = 30fps.
   Both `*_frame_setup` belong ONCE per frame — re-emitting per object/quad is the
   classic perf killer. Prime the GEO with a few empty `m2_frame_begin/end` at startup.

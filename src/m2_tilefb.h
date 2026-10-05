@@ -43,6 +43,12 @@
 #define TFB_CELLS     (TFB_CELLS_W * TFB_CELLS_H)  /* 3072 */
 #define TFB_BANKS     ((TFB_CELLS + 127) / 128)    /* palette banks the FB spans (24) */
 
+/* Tile-entry category bit: M2_PRIO draws the FB above the 3D polygons, 0 below them (so
+ * polygon sprites, m2_sprite.h, show on top of it). Define before including to change it. */
+#ifndef TFB_PRIO
+#define TFB_PRIO      M2_PRIO
+#endif
+
 /* Set colormap entry `pix` (0..15) to a BGR555 colour, replicated across every palette
  * bank the framebuffer spans (palbank = char>>7) so a pixel renders the same in any cell.
  * NB pixel 0 is TRANSPARENT on the FG tile layer regardless of palette (the hw backdrop,
@@ -53,7 +59,7 @@ static void tfb_setcolor(u8 pix, u16 bgr555) {
         M2_PALETTE[b * 16 + (pix & 15)] = bgr555;
 }
 
-/* Point every FB cell at its own char block (entry = PRIO | n) and clear all pixels to 0
+/* Point every FB cell at its own char block (entry = TFB_PRIO | n) and clear all pixels to 0
  * (transparent). Call once when entering FB mode (after m2_init). Does NOT touch palettes.
  * ⚠ this repurposes char RAM 0..TFB_CELLS as raw pixel blocks — it collides with the
  * font/solid tiles (m2_loadfont, m2_backdrop, the manager bar), so FB mode must OWN the
@@ -62,7 +68,7 @@ static void tfb_init(void) {
     int n, i;
     volatile u32 *g = (volatile u32 *)M2_CHARGFX;
     for (n = 0; n < TFB_CELLS; n++)
-        M2_TILE_FG[n] = (u16)(M2_PRIO | (u32)n);
+        M2_TILE_FG[n] = (u16)(TFB_PRIO | (u32)n);
     for (i = 0; i < TFB_CELLS * 8; i++) g[i] = 0u;   /* 32 bytes/cell = 8 u32/cell */
 }
 
