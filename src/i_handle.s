@@ -24,7 +24,6 @@
 	.globl	_user_NMI
 
 	.globl  _irq_vblank
-	.globl  _irq_serial
 
 	# frameVBL — a FIXED platform cell (see m2.h M2_FRAMEVBL_ADDR): was a C .bss
 	# global whose floating address forced apps into --just-symbols lockstep with
@@ -168,36 +167,4 @@ _other_irq:
 # observable (frozen frame) rather than running off into garbage.
 _intr_halt:
 	b		_intr_halt
-
-_irq_serial:
-
-	ret
-
-	stq     g0,(sp)
-	addo    16,sp,sp
-	stq     g4,(sp)
-	addo    16,sp,sp
-	stq     g8,(sp)
-	addo    16,sp,sp
-	stq     g12,(sp)
-	addo    16,sp,sp				# push to stack
-
-	mov     0,g14
-
-	call	_handleSerialIRQ
-
-	subo    16,sp,sp
-	ldq     (sp),g12
-	subo    16,sp,sp
-	ldq     (sp),g8
-	subo    16,sp,sp
-	ldq     (sp),g4
-	subo    16,sp,sp
-	ldq     (sp),g0					# pop from stack
-
-	lda     0x00e80000,r4
-	lda     0x0400,r5
-	st      r5,(r4)					# clear irq
-	ret
-
 
