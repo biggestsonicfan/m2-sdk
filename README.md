@@ -68,6 +68,11 @@ with HLE off. Two paths DO render on the real GEO:
   `0x01000202`; m2-snake's Pong). `m2_frame_begin()` → **`m2_draw_frame_setup()`**
   (render-state prelude, ONCE/frame) → `m2_fill_rect`/`m2_draw_text_px`/… →
   `m2_frame_commit()`. Multi-colour (a colorbase per quad), per-quad z-layer.
+- **2D sprites → `m2_sprite.h`** (same DIRECT path, textured): `m2_spr_load` uploads an
+  indexed image once (one mask per pen); per frame `m2_spr_frame_setup()` → `m2_spr_draw`/
+  `m2_spr_draw_scaled` (flip, scale, clip rect, layers) → `m2_frame_commit()`. A sprite
+  costs the same few display-list words at any size, and no tile-plane chars change.
+  Example: `src/spritedemo.c`; m2-pacman's `pacman_geo` build.
 
 Pacing: `m2_frame_commit()` + `m2_vsync()` = 60fps; `m2_frame_end()` = 2-vblank/30fps
 (STF parity). Prime the GEO once at startup with a few empty `m2_frame_begin/end`.
@@ -121,6 +126,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_geo.h` | Descriptive GEO display-list builder (object_data for real-hardware-portable geometry; direct_data primitives). Includes `geo_initialize`/`geometry_stuff` — the real-silicon GEO boot/frame model. |
 | `m2_text.h` | **Silicon-capable** text: COP model-456 glyphs (`m2_draw_text`, world coords) + `m2_text_screen` (pixel coords). gFont → 128×64 texram0 atlas. |
 | `m2_draw.h` | 2D filled shapes via the DIRECT-FIFO path: `m2_fill_rect`/`fill_ellipse`/`fill_circle` (+ `_o` outlines), `m2_draw_text_px`. Pixel-coord, multi-colour, z-layered. Per frame: `m2_frame_begin` → **`m2_draw_frame_setup`** (render-state ONCE/frame) → draws → `m2_frame_commit`. MAME-proven (`M2_HLE_GEO_OFF`). |
+| `m2_sprite.h` | **Sprites as textured GEO quads** (DIRECT path): indexed images → per-pen masks in a texram0 atlas, `m2_spr_draw`/`_scaled` with flips, a clip rect and 8 layers; `m2_spr_flat_colors` makes colorbase colours exact. MAME built-in GEO + `M2_HLE_GEO_OFF`, m2-hle2; not m2emulator. `src/spritedemo.c`. |
 | `m2_boot.h` | One-call silicon bring-up `m2_silicon_boot()` — composes the COP/GEO/colour inits (m2_3d + m2_geo + m2_color) in the proven order for the object_data path. |
 | `m2_obj.h` | **Silicon 3D objects** (COP-bridge): `m2_obj_frame_setup` (projection ONCE/frame), `m2_obj_submit` (a model-table object), `m2_solid_quad` (flat-colour quad). Pulls in `m2_boot.h` (for `m2_silicon_boot`) + `stf_cop_preamble.h`. m2-snake's ice-cube sandbox. |
 | `m2_tex_codec.h` | Decode an STF compressed texture page from the texture ROM into a GEO sheet (`tex_load_atlas`) — textures straight from the ROM source, no embedded blob. |
