@@ -148,9 +148,8 @@ M2_API void m2_uart_hex(u32 v) {           /* "XXXXXXXX" big-endian nibbles */
  * edge model. AFTER m2_memory.h (uses M2_MEM) and m2_io.h (M2_INP_* masks). read_sw/
  * write_sw are called from the vblank ISR (i_handle.s VsyncScr). */
 #include "m2_swio.h"
-/* Empty boot-asm hooks. The SDK's own .s files no longer call them, but a game's own
- * i_handle.s may (m2-sonic's calls _handleSerialIRQ). M2_API so these are GLOBAL in the
- * kernel but `static` in any app TU that includes m2.h directly (e.g. platformer):
+/* M2_API so these are GLOBAL in the kernel (the boot .s references them by linker
+ * symbol) but `static` in any app TU that includes m2.h directly (e.g. platformer):
  * that keeps a GS_STANDALONE build — app + kernel linked into one image — from
  * hitting a multiple-definition collision on them. */
 M2_API void handleSerialIRQ(void) { }

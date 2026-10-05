@@ -30,8 +30,8 @@ add_executable(game.elf ${M2_STARTUP_ASM} src/${M2_GAME}.c)
 target_include_directories(game.elf PRIVATE src)
 target_compile_options(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2>)
 
-# Standalone single-image ROM: emit m2.h's asm-called functions (read_sw/write_sw from the
-# vblank ISR, the handleSerialIRQ/kickGEO/waitVBL stubs) as GLOBAL symbols. m2.h defaults M2_API to `static` for the
+# Standalone single-image ROM: emit m2.h's boot stubs (kickGEO/waitVBL/handleSerialIRQ,
+# called by the boot asm) as GLOBAL symbols. m2.h defaults M2_API to `static` for the
 # app-inside-a-kernel (GS_STANDALONE) build; a lone game .c has no kernel TU to collide
 # with, so it must be global or the link fails with undefined _kickGEO/_waitVBL/... .
 target_compile_definitions(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:M2_API=>)
