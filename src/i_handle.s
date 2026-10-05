@@ -203,8 +203,8 @@ _irq_serial:
 	ldq     (sp),g0					# pop from stack
 
 	lda     0x00e80000,r4
-	lda     0x0400,r5
-	st      r5,(r4)					# clear irq
+	lda     0xfffffbff,r5			# ~0x400: ack-by-AND (MAME irq_ack_w), so clear
+	st      r5,(r4)					# only bit10 (0x400 would clear every other request)
 	ret
 
 
