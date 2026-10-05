@@ -119,6 +119,22 @@ static void m2_obj_frame_setup(void) {
     cop_emit_obj_preamble(cf);                                   /* STF projection+basis preamble */
 }
 
+/* The tail every model-table submit shares, after its transform stream: the fadd x3 fence, then
+ * polygon_submit(0x78) with the model header = the COMMIT, the running polygon counts read back, and
+ * the GEO END mark. m2_obj_submit and m2_sprite.h's M2_SPR_COP quads both end with it. */
+static void m2__obj_commit(volatile u32 *cf, u32 tpa, u32 tha, u32 oba, u32 obc) {
+    *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;              /* fadd x3 fence */
+    cop_drain(cf, 1u);
+    { u32 wr = *(volatile u32 *)COP_WPOS_REG;
+      *(volatile u32 *)GEO_WRITE_REG = wr + 0x48u;               /* GEO_WRITE = COP_WPOS + 0x48 */
+      *cf = COP_SUBMIT; *cf = wr; *cf = 0u;                      /* polygon_submit (op 0x78) */
+      *cf = tpa; *cf = tha; *cf = oba; *cf = obc;                /* model header */
+      *cf = g_cop_p2; *cf = g_cop_p;                             /* P2_POLYGON, POLYGON (running) */
+      g_cop_p2 = *cf; g_cop_p = *cf;                             /* read back + save */
+      { u32 ep = *(volatile u32 *)COP_WPOS_REG;                  /* GEO END mark */
+        *(volatile u32 *)(GEO_BUFFERRAM + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
+}
+
 /* ---- per-OBJECT submit (after m2_obj_frame_setup; threads multiple objects via g_cop_p) ----------
  * Transform stream (identity/pos/angles/scale) + polygon_submit(0x78) = the COMMIT, then the GEO END
  * mark. tha_override != 0 replaces the model's material header (e.g. a flat colorbase header for model
@@ -134,16 +150,7 @@ static void m2_obj_submit(u32 model_no, u32 tha_override, u32 px, u32 py, u32 pz
     *cf = COP_ANG_X; *cf = ax;
     *cf = COP_ANG_Z; *cf = az;
     *cf = COP_SCALE; *cf = sxb; *cf = syb; *cf = szb;            /* per-axis scale */
-    *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;              /* fadd x3 fence */
-    cop_drain(cf, 1u);
-    { u32 wr = *(volatile u32 *)COP_WPOS_REG;
-      *(volatile u32 *)GEO_WRITE_REG = wr + 0x48u;               /* GEO_WRITE = COP_WPOS + 0x48 */
-      *cf = COP_SUBMIT; *cf = wr; *cf = 0u;                      /* polygon_submit (op 0x78) */
-      *cf = hdr[0]; *cf = tha; *cf = hdr[2]; *cf = hdr[3];       /* tpa / tha(maybe override) / oba / obc */
-      *cf = g_cop_p2; *cf = g_cop_p;                             /* P2_POLYGON, POLYGON (running) */
-      g_cop_p2 = *cf; g_cop_p = *cf;                             /* read back + save */
-      { u32 ep = *(volatile u32 *)COP_WPOS_REG;                  /* GEO END mark */
-        *(volatile u32 *)(GEO_BUFFERRAM + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
+    m2__obj_commit(cf, hdr[0], tha, hdr[2], hdr[3]);             /* tha may be the override */
 }
 
 /* Convenience: one flat-colour quad (model 456) of colorbase cb (colour = palram[cb+0x1000]). Writes

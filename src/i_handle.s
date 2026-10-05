@@ -72,7 +72,8 @@ _irq_vblank:
 
 	# ---- BREAK-IN: abort a running/hung app back to the monitor (m2_fault.h m2_break_t
 	# @0x5F0020). Gated on `armed` so the boot/manager fast-path is unaffected. Triggers:
-	# `request` (host writes 1 -> bridge-pokeable) OR the SERVICE button (IN0 bit2, low).
+	# `request` (host writes 1 -> bridge-pokeable) OR the TEST button (IN0 bit2, low;
+	# MAME's "Service Mode" input, not SERVICE1 = bit3).
 	# On abort: ack, count++, pivot to recover_sp, branch to recover_fn (never returns).
 	# Only r3-r7/r13 + g0 are used; r3 (scratch-frame base) is re-derived in vbl_restore.
 	lda     0x005F0020, r4			# m2_break
@@ -80,11 +81,11 @@ _irq_vblank:
 	cmpobe  0, r5, vbl_restore		# not armed -> normal return (no app running)
 	ld      4(r4), r5				# request set (host)?
 	cmpobne 0, r5, vbl_break
-	lda     0x01C00000, r6			# else poll SERVICE (IN0 bit2, active-low)
+	lda     0x01C00000, r6			# else poll TEST (IN0 bit2, active-low)
 	mov     0, g0					# bank register is WRITE-only; the SDK input helpers
 	stob    g0, (r6)				# set bank=0 before every read, so leaving it 0 is safe
 	ldob    2(r6), g0				# read IN0 (system inputs)
-	bbc     2, g0, vbl_break		# bit2 (SERVICE) clear = pressed -> abort
+	bbc     2, g0, vbl_break		# bit2 (TEST) clear = pressed -> abort
 	b       vbl_restore
 
 vbl_break:

@@ -245,7 +245,7 @@
 #define TEXRAM_1      0x11300000u  /* STF texram_1   (RAMBASE 0x500258) — mip ping-pong w/ TEXRAM_0_1*/
 #define M2_LUMARAM    0x11400000u  /* STF luma_ram   (RAMBASE 0x50025C) — polygon luma RAM          */
 #define GEO_ZCLIP_REG 0x0181C000u  /* _3D_ZCLIP_START (write 0xFF byte / 0xFFFF00FF word to
-                                   /* disable board-level near clip)                             */
+                                    * disable board-level near clip)                             */
 #define ZCLIP_REG     GEO_ZCLIP_REG   /* legacy alias */
 
 /* Named bitfields for the polygon words above (attribute / texture header / z-sort / palette SET),

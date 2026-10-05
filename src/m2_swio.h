@@ -69,7 +69,7 @@ M2_API void read_sw(void) {
     if (!(b & 0x40u)) top &= ~(1u << 3);
     word |= top << 24;                      /* -> byte3                      */
 
-    /* STF start-bit canonicalisation: fold bit10->bit11 (P1) and bit18->bit19 (P2). */
+    /* STF start-bit canonicalisation: a press on bit11 (P1) / bit19 (P2) moves to bit10 / bit18. */
     if (!(word & (1u << 11))) { word &= ~(1u << 10); word |= (1u << 11); }
     if (!(word & (1u << 19))) { word &= ~(1u << 18); word |= (1u << 19); }
 

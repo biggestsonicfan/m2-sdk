@@ -253,16 +253,7 @@ static void m2__spr_cop_quad(int x0, int y0, int x1, int y1, u32 tpa, u32 tha, i
     *cf = COP_ANG_Z; *cf = 0u;
     *cf = COP_SCALE;                                                /* size * 2^-k / 12 */
     *cf = m2__spr_f3((u32)(x1 - x0), k + 2); *cf = 0x3F800000u; *cf = m2__spr_f3((u32)(y1 - y0), k + 2);
-    *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;                 /* fence, then commit (m2_obj_submit) */
-    cop_drain(cf, 1u);
-    { u32 wr = *(volatile u32 *)COP_WPOS_REG;
-      *(volatile u32 *)GEO_WRITE_REG = wr + 0x48u;
-      *cf = COP_SUBMIT; *cf = wr; *cf = 0u;
-      *cf = tpa; *cf = tha; *cf = mdl[2]; *cf = mdl[3];
-      *cf = g_cop_p2; *cf = g_cop_p;
-      g_cop_p2 = *cf; g_cop_p = *cf;
-      { u32 ep = *(volatile u32 *)COP_WPOS_REG;
-        *(volatile u32 *)(GEO_BUFFERRAM + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
+    m2__obj_commit(cf, tpa, tha, mdl[2], mdl[3]);
 }
 #endif
 

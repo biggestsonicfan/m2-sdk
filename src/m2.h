@@ -18,7 +18,7 @@
  * Hard-won board facts baked in here (do not re-derive):
  *   - colorxlat MUST be built or every pen renders black (model2 maps each pen
  *     through colorxlat@0x1810000 then gamma).
- *   - the vblank pending bit (0xE80000 bit0, polled by m2_vsync) is only latched
+ *   - the vblank pending bit (0xE80000 bit0, acked by the vblank ISR) is only latched
  *     when the source is enabled in 0xE80004 — and that enable MUST be written
  *     twice (gcc960 -O2 turns a lone tail constant store into `st g14`, g14=0).
  *   - park the geometrizer on an END instr or its garbage 3D clobbers the tiles.
@@ -109,9 +109,10 @@ _Static_assert(__builtin_offsetof(m2_exit_t, handler) == 4, "m2_exit_t.handler")
  * disconnected UART can't hang the board. This is the developer feedback channel
  * (the 315-5649 at 0x1C00000 is the on-board I/O link, not a path to a PC). */
 #define M2_UART_DATA (*(volatile u16 *)0x01C80000u)
-#define M2_UART_STAT (*(volatile u16 *)0x01C80002u)   /* read: 8251 status; bit0 = TxRDY */
+#define M2_UART_CTL_ADDR 0x01C80002u                  /* write: 8251 mode/command; read: status */
+#define M2_UART_STAT (*(volatile u16 *)M2_UART_CTL_ADDR) /* read: 8251 status; bit0 = TxRDY */
 M2_API void m2_uart_putc(char c) {
-    (void)m2_wait_mask16(M2W_UART_TX, 0x01C80002u, 0x01u, 0x01u, 200000u);  /* TxRDY */
+    (void)m2_wait_mask16(M2W_UART_TX, M2_UART_CTL_ADDR, 0x01u, 0x01u, 200000u);  /* TxRDY */
     M2_UART_DATA = (u16)(u8)c;
 }
 M2_API void m2_uart_puts(const char *s) { while (*s) m2_uart_putc(*s++); }
@@ -176,7 +177,7 @@ M2_API void m2_vsync(void) {
         volatile m2_exit_t *ex = &M2_EXIT;
         if (ex->magic == M2_EXIT_MAGIC) {
             M2_IO.bank = 0;
-            if (!(M2_IO.in0 & 0x10u)) ((void (*)(void))ex->handler)();   /* never returns */
+            if (!(M2_IO.in0 & M2_IN0_START1)) ((void (*)(void))ex->handler)();   /* never returns */
         }
     }
 }
@@ -219,12 +220,10 @@ M2_API void m2_cleartiles(u16 entry) {
  * palette[0]), so matching palette[0] to the field makes that transparency read cleanly
  * (gaps == field) on MAME/silicon instead of showing a black box behind every glyph. */
 M2_API void m2_backdrop(u16 colour) {
-    int i;
     m2_setpal(0, colour);                 /* hw backdrop = field, so text gaps match (transparent text) */
     m2_setpal(1, colour);                 /* palbank 0, pixel 1 = colour */
     m2_solidtile(1, 1);                   /* char 1 = solid pixel-1 (bank 0 gfx) */
-    for (i = 0; i < (int)(M2_W * 64u); i++)
-        M2_TILE_FG[i] = (u16)((0 << 7) | 1);   /* FG, palbank 0, char 1, NO PRIO -> below 3D */
+    m2_cleartiles((u16)((0 << 7) | 1));   /* FG, palbank 0, char 1, NO PRIO -> below 3D */
 }
 
 /* Print ASCII at (col,row) in colour group `palbank` (glyphs are pixel 1, so the
@@ -381,7 +380,7 @@ M2_API void m2_init(void) {
      * 0x40 — used to live here too; removed as unverified, MAME ignores it and it
      * has never been tested on silicon.) */
     {
-        volatile u16 *uart_ctl = (volatile u16 *)0x01C80002u;  /* i8251 control reg */
+        volatile u16 *uart_ctl = (volatile u16 *)M2_UART_CTL_ADDR;  /* i8251 control reg */
         volatile int d;
         /* i8251 aux UART, matching House of the Dead _InitSerial exactly: 3 null/
          * sync writes, internal reset (0x40), mode 0x4E (async x16, 8-N-1), then the
