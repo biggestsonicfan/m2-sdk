@@ -21,7 +21,13 @@
  * Path: the GEO DIRECT-data command (screen-space verts + an inline texture header, as
  * m2_draw.h's textured quads). It renders under MAME (built-in GEO and the real cpres2 with
  * M2_HLE_GEO_OFF) and m2-hle2. It does NOT show on m2emulator, which only draws COP-submitted
- * objects (m2_obj.h; memory note m2emulator-render-path).
+ * objects (m2_obj.h; memory note m2emulator-render-path): use M2_SPR_COP there.
+ *
+ * #define M2_SPR_COP before including this file for the COP path instead: each quad is the flat
+ * quad model 456 (as m2_obj.h's m2_solid_quad and m2_text.h's glyphs), submitted through the COP
+ * with the same texture header and its own UVs, placed so that it covers the same screen pixels.
+ * It needs m2_silicon_boot and costs the SHARC a transform per quad, and it is the path
+ * m2emulator draws. Same API; m2_spr_frame_setup then also runs m2_obj_frame_setup.
  *
  * Layering: the System 24 tile plane's cells WITHOUT the M2_PRIO bit are drawn below the
  * polygons, cells with it above (MAME model2_v.cpp screen_update). A tile-plane background
@@ -55,6 +61,9 @@
 #include "m2_constants.h"   /* GEO_OP_*, GEO_TEXRAM_BIT, GEO_POLY_QUAD, M2_GEOFIFO_ADDR, M2_COLORXLAT */
 #include "m2_polyattr.h"    /* M2_TH0_*, M2_TH2_TILE, M2_TH3_COLORBASE, M2_PAL_SET */
 #include "m2_geo.h"         /* m2_geo_fifo_window_full / _texparam, m2_geo_cmd */
+#ifdef M2_SPR_COP
+#include "m2_obj.h"         /* m2_obj_frame_setup, cop_drain, M2_MODEL_TABLE, M2_FLAT_QUAD_MODEL */
+#endif
 
 #ifndef M2_SPR_TEX_X
 #define M2_SPR_TEX_X     256u
@@ -191,15 +200,20 @@ static void m2_spr_clip(int x0, int y0, int x1, int y1) {
     m2_spr_clip_x0 = x0; m2_spr_clip_y0 = y0; m2_spr_clip_x1 = x1; m2_spr_clip_y1 = y1;
 }
 
-/* Per-frame render state (as m2_draw_frame_setup) and the per-frame sprite counters. Once per
- * frame, after m2_frame_begin. */
+/* Per-frame render state (as m2_draw_frame_setup, or m2_obj_frame_setup for M2_SPR_COP) and the
+ * per-frame sprite counters. Once per frame, after m2_frame_begin. */
 static void m2_spr_frame_setup(void) {
-    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     int i;
+#ifdef M2_SPR_COP
+    m2_obj_frame_setup();                                           /* GEO state + COP projection */
+    *(volatile u32 *)ZCLIP_REG = 0xFFFF00FFu;                       /* no z clip (as hwdemo.c) */
+#else
+    volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     m2_geo_cmd(GEO_SLOT_ZMODE); *fifo = 0x40800000u;                /* z-sort granularity 4.0 */
     m2_geo_cmd(GEO_SLOT_FOCAL); *fifo = 0x438C0000u; *fifo = 0x438C0000u;   /* 280.0 */
     m2_geo_fifo_window_full();
     m2_geo_fifo_texparam(0x000010FFu);
+#endif
     for (i = 0; i < 32; i++) m2__spr_hdr_done[i] = 0;
     m2__spr_nq = 0;
     m2__spr_frame++;
@@ -214,19 +228,54 @@ static u32 m2__spr_f(int v, int k) {
     return s | ((127u + e - (u32)k) << 23) | (a & 0x7FFFFFu);
 }
 
+#ifdef M2_SPR_COP
+/* IEEE-754 bits of n/3 * 2^-k, for 0 <= n < 512 (to ~2^-22: model 456 is 12 units wide) */
+static u32 m2__spr_f3(u32 n, int k) {
+    u32 a, e = 0;
+    if (n == 0) return 0;
+    a = (n << 23) / 3u;                                             /* n/3 = a * 2^-23 */
+    while (a >= 0x1000000u) { a >>= 1; e++; }
+    while (!(a & 0x800000u)) { a <<= 1; e--; }
+    return ((127u + e - (u32)k) << 23) | (a & 0x7FFFFFu);
+}
+
+/* The screen rectangle as model 456 (12x12 units in XZ, centred) through the COP: turned to face
+ * the camera (ang_x 90 degrees, as m2_solid_quad), scaled, placed at depth z = 280 * 2^-k so one
+ * pixel is 2^-k units (focal 280, hwdemo.c's mapping), with this quad's texture header and UVs. */
+static void m2__spr_cop_quad(int x0, int y0, int x1, int y1, u32 tpa, u32 tha, int k) {
+    volatile u32 *cf = (volatile u32 *)M2_COPFIFO_ADDR;
+    volatile const u32 *mdl = (volatile const u32 *)(M2_MODEL_TABLE + M2_FLAT_QUAD_MODEL * 16u);
+    *cf = COP_IDENTITY;
+    *cf = COP_SET_POS;                                              /* the centre; world y is up */
+    *cf = m2__spr_f(x0 + x1 - 496, k + 1); *cf = m2__spr_f(384 - y0 - y1, k + 1); *cf = m2__spr_f(280, k);
+    *cf = COP_ANG_Y; *cf = 0u;
+    *cf = COP_ANG_X; *cf = 0x4000u;
+    *cf = COP_ANG_Z; *cf = 0u;
+    *cf = COP_SCALE;                                                /* size * 2^-k / 12 */
+    *cf = m2__spr_f3((u32)(x1 - x0), k + 2); *cf = 0x3F800000u; *cf = m2__spr_f3((u32)(y1 - y0), k + 2);
+    *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;                 /* fence, then commit (m2_obj_submit) */
+    cop_drain(cf, 1u);
+    { u32 wr = *(volatile u32 *)COP_WPOS_REG;
+      *(volatile u32 *)GEO_WRITE_REG = wr + 0x48u;
+      *cf = COP_SUBMIT; *cf = wr; *cf = 0u;
+      *cf = tpa; *cf = tha; *cf = mdl[2]; *cf = mdl[3];
+      *cf = g_cop_p2; *cf = g_cop_p;
+      g_cop_p2 = *cf; g_cop_p = *cf;
+      { u32 ep = *(volatile u32 *)COP_WPOS_REG;
+        *(volatile u32 *)(GEO_BUFFERRAM + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
+}
+#endif
+
 /* Depth of a layer: z = 2^-(layer+1), so a higher layer is nearer. Every z stays <= 1.0, which
  * keeps the GEO's distance mip at level 0 (mml = log2(z) - texlod <= 0 in model2rd.ipp): a 1:1
  * sprite samples its texels as they are. The verts are pre-multiplied by z (screen = 248 + x/z,
- * 192 - y/z), which a power of two keeps exact. */
+ * 192 - y/z), which a power of two keeps exact. M2_SPR_COP: z = 280 * 2^-(layer+8), 1.09 for
+ * layer 0, so again <= ~1. */
 static void m2__spr_quad(int x0, int y0, int x1, int y1, u32 u0, u32 v0, u32 u1, u32 v1,
                          u32 cb, int layer) {
     volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
-    int k = layer + 1;
     u32 tha = GEO_TEXRAM_BIT | (M2_SPR_HDR_SLOT + cb * 4u);
     u32 uv = GEO_TEXRAM_BIT | (M2_SPR_UV_SLOT + (m2__spr_frame & 1u) * 0x1000u + m2__spr_nq * 8u);
-    u32 zf = 0x3F800000u - ((u32)k << 23);
-    u32 l = m2__spr_f(x0 - 248, k), r = m2__spr_f(x1 - 248, k);
-    u32 t = m2__spr_f(192 - y0, k), b = m2__spr_f(192 - y1, k);
     if (!(m2__spr_hdr_done[(cb >> 5) & 31u] & (1u << (cb & 31u)))) {
         m2__spr_hdr_done[(cb >> 5) & 31u] |= 1u << (cb & 31u);
         *fifo = GEO_OP_TEXDATA; *fifo = tha; *fifo = 4u;
@@ -235,6 +284,20 @@ static void m2__spr_quad(int x0, int y0, int x1, int y1, u32 u0, u32 v0, u32 u1,
         *fifo = M2_TH2_TILE(M2_SPR_TEX_X, M2_SPR_TEX_Y);
         *fifo = M2_TH3_COLORBASE(cb);
     }
+#ifdef M2_SPR_COP
+    /* UVs in model 456's vertex order: BR, BL, TL, TR (m2_text.h's glyphs) */
+    *fifo = GEO_OP_TEXDATA; *fifo = uv; *fifo = 8u;
+    *fifo = v1; *fifo = u1;
+    *fifo = v1; *fifo = u0;
+    *fifo = v0; *fifo = u0;
+    *fifo = v0; *fifo = u1;
+    m2__spr_cop_quad(x0, y0, x1, y1, uv, tha, layer + 8);
+#else
+    {
+    int k = layer + 1;
+    u32 zf = 0x3F800000u - ((u32)k << 23);
+    u32 l = m2__spr_f(x0 - 248, k), r = m2__spr_f(x1 - 248, k);
+    u32 t = m2__spr_f(192 - y0, k), b = m2__spr_f(192 - y1, k);
     /* UVs (1/8 texel) per vertex, (v,u) pairs: TL, TR, BR, BL */
     *fifo = GEO_OP_TEXDATA; *fifo = uv; *fifo = 8u;
     *fifo = v0; *fifo = u0;
@@ -251,6 +314,8 @@ static void m2__spr_quad(int x0, int y0, int x1, int y1, u32 u0, u32 v0, u32 u1,
     *fifo = r; *fifo = b; *fifo = zf;
     *fifo = l; *fifo = b; *fifo = zf;
     *fifo = 0u; *fifo = 0u;
+    }
+#endif
     m2__spr_nq++;
 }
 

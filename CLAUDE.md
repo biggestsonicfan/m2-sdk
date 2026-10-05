@@ -44,6 +44,8 @@ usable FPU). The rules:
 - **Sprites (indexed images) → `m2_sprite.h`**: textured DIRECT quads, one per pen;
   `m2_spr_frame_setup()` once/frame → `m2_spr_draw(...)`. Overlap needs polygon attr
   bit 10 (sort by nearest z): plain `GEO_POLY_QUAD` sorts every quad into one bucket.
+  m2emulator draws no DIRECT data: `#define M2_SPR_COP` sends the same quads through
+  the COP as model 456 (needs `m2_silicon_boot`); same API, pixel-identical in MAME.
   Palette mode (`m2_spr_palette`, `m2_spr_tex_cell`, `m2_spr_draw_tex`): one quad per
   16-colour image, its colours per texel via lumaram + a colorxlat row; 1:1 only.
   Example `src/spritedemo.c`.
