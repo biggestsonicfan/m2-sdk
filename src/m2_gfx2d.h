@@ -63,6 +63,8 @@ static float g2d__zc;           /* current draw depth (decrements per primitive)
 
 static u32  g2d__f(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }
 static void g2d__w(u32 v)   { if (g2d__n < 0x3000) g2d__buf[g2d__n++] = v; }
+/* room for one more 20-word quad AND the END g2d_end appends (g2d__w drops words past the end) */
+static int  g2d__room(void) { return g2d__n + 20 + 1 <= 0x3000; }
 static float g2d__nextz(void) { float z = g2d__zc; g2d__zc -= G2D_ZSTEP; if (g2d__zc < 4.0f) g2d__zc = 4.0f; return z; }
 
 /* screen pixel (px,py) at depth z -> direct_data world vertex */
@@ -73,7 +75,7 @@ static void g2d__v(float out[3], float px, float py, float z) {
 /* one flat-colour quad (points v1,v0,v2,v3), doubleside (winding-agnostic) */
 static void g2d__quad(const float v0[3], const float v1[3],
                       const float v2[3], const float v3[3], u32 cb) {
-    if (g2d__n + 17 > 0x3000) return;        /* skip cleanly when the list is full */
+    if (!g2d__room()) return;                 /* skip cleanly when the list is full */
     g2d__w(G2D_OP_DIRECT);
     g2d__w(0u);
     g2d__w(G2D_TEXRAM_BIT | (cb * 4u));
@@ -284,7 +286,9 @@ static void g2d_tex_uv(u32 uvoff, const int uv[8]) {
 
 /* textured quad (screen rect x,y,w,h) referencing UV block uvoff + header hdr */
 static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
-    float a[3], b[3], c[3], d[3], z = g2d__nextz();
+    float a[3], b[3], c[3], d[3], z;
+    if (!g2d__room()) return;
+    z = g2d__nextz();
     g2d__v(a, x, y, z); g2d__v(b, x + w, y, z); g2d__v(c, x + w, y + h, z); g2d__v(d, x, y + h, z);
     g2d__w(G2D_OP_DIRECT);
     g2d__w(G2D_TEXRAM_BIT | uvoff);          /* tpa = UV points  */
@@ -369,7 +373,7 @@ static void g2d_clear(void) { g2d_begin(); g2d_end(); }
  * g2d_begin()/g2d_end() like the others. */
 static void g2d_vquadl(const float v0[3], const float v1[3],
                        const float v2[3], const float v3[3], u32 cb, u32 luma) {
-    if (g2d__n + 17 > 0x3000) return;         /* skip cleanly when the list is full */
+    if (!g2d__room()) return;                 /* skip cleanly when the list is full */
     g2d__w(G2D_OP_DIRECT);
     g2d__w(0u);
     g2d__w(G2D_TEXRAM_BIT | (cb * 4u));

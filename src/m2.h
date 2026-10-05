@@ -42,11 +42,17 @@ typedef unsigned int   u32;
  * Do NOT route this through the COP (m2_cop_sqrt): COP_SQRT is always "defined"
  * (an opcode macro, not a feature flag), and waiting on the COP math FIFO can hang
  * the render loop. The COP is only an accelerator; the C path is correct under
- * soft-float and needs no libm. */
+ * soft-float and needs no libm.
+ * The first guess halves the exponent (within 6% of the root for any x), so three
+ * Newton steps reach float precision. (Starting from x, as it once did, eight steps
+ * were not enough outside ~0.01..10000: m2_sqrtf(1e6) gave 3991.) */
 static float m2_sqrtf(float x) {
+    union { float f; u32 u; } v;
     float g; int i;
     if (x <= 0.0f) return 0.0f;
-    g = x; for (i = 0; i < 8; i++) g = 0.5f * (g + x / g);
+    v.f = x; v.u = (v.u >> 1) + 0x1FC00000u;
+    g = v.f;
+    for (i = 0; i < 3; i++) g = 0.5f * (g + x / g);
     return g;
 }
 
@@ -325,9 +331,8 @@ M2_API void m2__build_luma2(void) {
  * Call again after any CG/scroll load that overwrites the 0..0x3FF font tile range. */
 M2_API void m2_loadfont(void) {
     int bank, i;
-    const int n = (int)sizeof(gFont);   /* gFont is 127*32=4064, not 128*32 — */
-    for (bank = 0; bank < 8; bank++)     /* clamp so GCC11 can't exploit the OOB */
-        for (i = 0; i < n; i++)
+    for (bank = 0; bank < 8; bank++)
+        for (i = 0; i < (int)sizeof(gFont); i++)
             M2_CHARGFX[bank * 128 * 32 + i] = gFont[i];
 }
 

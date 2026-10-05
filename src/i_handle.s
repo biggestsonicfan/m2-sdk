@@ -131,10 +131,12 @@ vbl_restore:
 	.globl	_other_irq
 	.globl	_intr_halt
 
-# VsyncObj (STF vector 13 @0xD10): just ACK (clear bit2).
+# VsyncObj (STF vector 13 @0xD10): just ACK. irq_control_word routes IRQ1 here, and
+# MAME raises IRQ1 from request bit1 only (irq_update), so clear bit1 (this once
+# cleared bit2, a timer bit, and left its own source asserted).
 _vsync_obj:
 	lda     0x00e80000,r4
-	subo    5,0,r5					# r5 = 0xFFFFFFFB
+	subo    3,0,r5					# r5 = 0xFFFFFFFD
 	st      r5,(r4)					# ack (STF VsyncObj)
 	ret
 
@@ -150,15 +152,20 @@ _timer_irq:
 	st      g0,(g1)					# TIMER_04 = 0xFFFFF
 	lda     1,g0
 	st      g0,_timerFlag			# byte_50008C = 1
+	lda     0x00e80000,r4			# ack: IRQ2 = request bits 2-9 (the four timers are
+	lda     0xfffffc03,r5			# bits 2-5); unacked, the line stays asserted
+	st      r5,(r4)
 	subo    16,sp,sp
 	ldq     (sp),g0
 	ret
 
 # Other (STF vector 15 @0xDF0): STF checks IRQ bit10 -> send_sound_code (absent
-# here). Just ACK defensively.
+# here). Just ACK defensively. The request register is ack-by-AND (MAME
+# irq_ack_w: m_intreq &= data), so clear the sources that land here, bits 10-11;
+# writing all ones (as this once did) acks nothing and would let them storm.
 _other_irq:
 	lda     0x00e80000,r4
-	subi    1,0,r5					# r5 = 0xFFFFFFFF
+	lda     0xfffff3ff,r5			# r5 = ~0xC00
 	st      r5,(r4)					# ack
 	ret
 
