@@ -6,7 +6,7 @@
  * asymmetric "F" in each flip, at 1x/2x/4x, a ghost bouncing inside a clip box, and two
  * overlap tests (same layer: the later draw is in front; a higher layer wins whatever the
  * order). Every sprite costs the i960 the same ~30 display-list words per colour, whatever its
- * size.
+ * size. Top right, the ghost in palette mode: one quad each, its three colours from the texels.
  *
  *   cmake -B build -DM2_GAME=spritedemo && make -C build     (needs src/cpres1.h + cpres2.h)
  *   MAME: sfight with the two program EPROMs replaced; M2_HLE_GEO_OFF=1 for the real GEO.
@@ -17,7 +17,10 @@
 #include "m2_tilefb.h"
 #include "m2_sprite.h"
 
-enum { CB_RED = 1, CB_WHITE, CB_BLUE, CB_YELLOW, CB_GREEN, CB_PINK };
+enum { CB_RED = 1, CB_WHITE, CB_BLUE, CB_YELLOW, CB_GREEN, CB_PINK, CB_PAL = 40 };
+#define PAL_ROW 31             /* palette mode's colorxlat row (after m2_spr_flat_colors) */
+#define PAL_TU  480u           /* the palette-mode ghost's 16x16 in the atlas, clear of the masks */
+#define PAL_TV  480u
 
 /* 16x16, pens: 1 body, 2 eye white, 3 pupil */
 static const char *ghost_art[16] = {
@@ -103,6 +106,23 @@ int main(void) {
     for (i = 0; i < 16 * 16; i++) sq_pix[i] = 1;
     sq = m2_spr_load(sq_pix, 16, 16, 16);
 
+    /* palette mode: the ghost's pens straight into the atlas, four 8x8 cells */
+    m2_spr_palette_init();
+    m2_spr_palette(CB_PAL, PAL_ROW);
+    m2_spr_palette_pen(PAL_ROW, 1, M2_RGB(0, 31, 31));
+    m2_spr_palette_pen(PAL_ROW, 2, M2_RGB(31, 31, 31));
+    m2_spr_palette_pen(PAL_ROW, 3, M2_RGB(31, 0, 31));
+    for (i = 0; i < 4; i++) {
+        u32 rows[8];
+        int r, c;
+        for (r = 0; r < 8; r++) {
+            const char *a = ghost_art[(i >> 1) * 8 + r] + (i & 1) * 8;
+            rows[r] = 0;
+            for (c = 0; c < 8; c++) rows[r] = (rows[r] << 4) | (u32)(a[c] == '.' ? 0 : a[c] - '0');
+        }
+        m2_spr_tex_cell(PAL_TU + (u32)(i & 1) * 8u, PAL_TV + (u32)(i >> 1) * 8u, rows);
+    }
+
     for (;;) {
         bx += vx; by += vy;
         if (bx < 216 || bx > 392) vx = -vx;   /* overshoots the clip box on purpose */
@@ -116,6 +136,9 @@ int main(void) {
             m2_spr_draw(ghost, 48 + i * 24, 20, (u32)i, ghost_pens, 0);
             m2_spr_draw(f, 160 + i * 16, 24, (u32)i, f_pens, 0);
         }
+        /* palette mode: one quad per ghost, each flip */
+        for (i = 0; i < 4; i++)
+            m2_spr_draw_tex(260 + i * 24, 20, 16, 16, PAL_TU, PAL_TV, (u32)i, CB_PAL, 0);
         /* 2x and 4x */
         for (i = 0; i < 4; i++) {
             m2_spr_draw_scaled(ghost, 48 + i * 40, 48, 32, 32, (u32)i, i & 1 ? pink_pens : ghost_pens, 0);

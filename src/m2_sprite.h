@@ -15,7 +15,8 @@
  * writes one transparent mask per pen it uses, and m2_spr_draw draws one quad per pen, each in
  * the colorbase the caller gives that pen. m2_spr_flat_colors() makes a colorbase's colour
  * exact (the GEO's luma/lighting no longer changes it), so an indexed sprite looks the same as
- * its tile-plane version. Set colours with m2_spr_color(cb, bgr555).
+ * its tile-plane version. Set colours with m2_spr_color(cb, bgr555). Palette mode (further down)
+ * draws a 16-colour image as ONE quad instead, its texels choosing the colours.
  *
  * Path: the GEO DIRECT-data command (screen-space verts + an inline texture header, as
  * m2_draw.h's textured quads). It renders under MAME (built-in GEO and the real cpres2 with
@@ -80,6 +81,12 @@
 #define M2_SPR_MAX_QUADS 192                 /* per frame: ~30 words each in the 8K-word list */
 #endif
 #define M2_SPR_LAYERS    8
+#ifndef M2_SPR_LUMABASE
+#define M2_SPR_LUMABASE  0xFEu               /* palette mode's lumaram block: 0x7F00..0x7F7F, 0x7EFC.. */
+#endif
+#ifndef M2_SPR_XLAT
+#define M2_SPR_XLAT(c5)  (((c5) * 255u + 15u) / 31u)    /* palette mode: 5-bit channel -> colorxlat */
+#endif
 
 /* texture_ram slots (16-bit words): per-colorbase headers, then two banks of per-quad UVs
  * (alternate frames, so the GEO never reads a UV the next frame is already rewriting). Clear of
@@ -104,6 +111,7 @@ static m2_spr_img_t  m2__spr_img[M2_SPR_MAX];
 static int m2__spr_nimg, m2__spr_nmask;
 static u32 m2__spr_px, m2__spr_py, m2__spr_rowh;        /* shelf packer cursor */
 static u32 m2__spr_hdr_done[32];                        /* colorbase header sent this frame */
+static u32 m2__spr_palcb[32];                           /* colorbases in palette mode */
 static u32 m2__spr_nq, m2__spr_frame;
 static int m2_spr_clip_x0 = 0, m2_spr_clip_y0 = 0, m2_spr_clip_x1 = 496, m2_spr_clip_y1 = 384;
 
@@ -223,7 +231,7 @@ static void m2__spr_quad(int x0, int y0, int x1, int y1, u32 u0, u32 v0, u32 u1,
         m2__spr_hdr_done[(cb >> 5) & 31u] |= 1u << (cb & 31u);
         *fifo = GEO_OP_TEXDATA; *fifo = tha; *fifo = 4u;
         *fifo = M2_TH0_TEX | M2_TH0_XLUC | M2_TH0_MAPX(M2_SPR_TEX_LOG2W + 0u) | M2_TH0_MAPY(M2_SPR_TEX_LOG2H + 0u);
-        *fifo = 0u;
+        *fifo = (m2__spr_palcb[(cb >> 5) & 31u] >> (cb & 31u)) & 1u ? M2_SPR_LUMABASE : 0u;   /* th1: lumabase */
         *fifo = M2_TH2_TILE(M2_SPR_TEX_X, M2_SPR_TEX_Y);
         *fifo = M2_TH3_COLORBASE(cb);
     }
@@ -282,6 +290,92 @@ static void m2_spr_draw_scaled(int id, int x, int y, int dw, int dh, u32 flags,
 static void m2_spr_draw(int id, int x, int y, u32 flags, const u16 *pen_cb, int layer) {
     if (id < 0 || id >= m2__spr_nimg) return;
     m2_spr_draw_scaled(id, x, y, m2__spr_img[id].w, m2__spr_img[id].h, flags, pen_cb, layer);
+}
+
+/* ---- palette mode: a colour per texel --------------------------------------------------------
+ * The masks above cost one quad per pen. In palette mode an image is ONE quad whose texels are its
+ * pens: the texel's luma picks the colour. Texel t goes through lumaram (lumabase M2_SPR_LUMABASE,
+ * set in the colorbase's texture header) to luma 4 * (15 - t) + 2, and luma L reads colorxlat
+ * entry L of the colorbase's row (model2rd.ipp draw_scanline_tex; the colorbase's palram colour
+ * is (row,row,row), so R, G and B all read row `row`). Entries 4p..4p+3 of the row hold pen p's
+ * colour, so a pen keeps its colour through the GEO's luma scaling and the small sampling error.
+ * A texel is the pen XOR 0xF: pen 0 is texel 0xF, transparent.
+ *
+ * The bilinear filter only reproduces a texel exactly when the quad is drawn 1:1 at whole pixels
+ * (m2_spr_draw_tex does that; flips too): scaled, the in-between lumas land on other pens.
+ *
+ *     m2_spr_palette_init();                        // once: the lumaram table
+ *     m2_spr_palette(30, 1);                        // colorbase 30 = palette row 1 (0..31)
+ *     m2_spr_palette_pen(1, 5, M2_RGB(31,0,0));     // row 1, pen 5 = red (1..15)
+ *     m2_spr_tex_cell(0, 0, rows);                  // an 8x8 cell of pens into the atlas at (0,0)
+ *     ...
+ *     m2_spr_draw_tex(x, y, 8, 8, 0, 0, 0, 30, 0);  // between m2_spr_frame_setup and commit
+ *
+ * A row used as a palette here is not a flat colour (m2_spr_flat_colors writes every row). The
+ * tile plane's colours use entry 0x40 of each row (m2_init), which stays as it is. */
+
+/* The lumaram table. Once, before drawing in palette mode. */
+static void m2_spr_palette_init(void) {
+    volatile u16 *L = (volatile u16 *)M2_LUMARAM + (M2_SPR_LUMABASE << 7);
+    int i;
+    for (i = -4; i < 124; i++) L[i] = (u16)((15 - (i + 4) / 8) * 4 + 2);   /* texel*8 - 4 .. + 3 */
+}
+
+/* Colorbase cb draws in palette mode with the colours of row (0..31). */
+static void m2_spr_palette(u32 cb, u32 row) {
+    *(volatile u16 *)(M2_PALRAM + (cb + 0x1000u) * 2u) = (u16)((row & 31u) * 0x421u | M2_PAL_SET);
+    m2__spr_palcb[(cb >> 5) & 31u] |= 1u << (cb & 31u);
+}
+
+/* Pen (1..15) of palette row (0..31) = bgr555. */
+static void m2_spr_palette_pen(u32 row, u32 pen, u16 bgr555) {
+    volatile u16 *R = (volatile u16 *)(M2_COLORXLAT + 0x0000u) + row * 256u + pen * 4u;
+    volatile u16 *G = (volatile u16 *)(M2_COLORXLAT + 0x4000u) + row * 256u + pen * 4u;
+    volatile u16 *B = (volatile u16 *)(M2_COLORXLAT + 0x8000u) + row * 256u + pen * 4u;
+    u16 r = (u16)M2_SPR_XLAT(bgr555 & 31u), g = (u16)M2_SPR_XLAT((bgr555 >> 5) & 31u);
+    u16 b = (u16)M2_SPR_XLAT((bgr555 >> 10) & 31u);
+    R[0] = r; R[1] = r; R[2] = r; R[3] = r;
+    G[0] = g; G[1] = g; G[2] = g; G[3] = g;
+    B[0] = b; B[1] = b; B[2] = b; B[3] = b;
+}
+
+/* An 8x8 cell of pens into the atlas at (tx,ty) (texels, multiples of 8, inside the atlas),
+ * for palette mode. rows[r] is row r, eight 4-bit pens, the leftmost in bits 31..28 (a Mega
+ * Drive pattern row). Eight stores: texram0 holds texels in 2x2 blocks, a 32-bit word being
+ * columns 0..3 of two rows (model2rd.ipp get_texel). Only texram0: mip level 0 reads nothing
+ * else, and m2_spr_draw_tex never leaves level 0. Fast enough to run per frame. */
+static void m2_spr_tex_cell(u32 tx, u32 ty, const u32 *rows) {
+    volatile u32 *T = (volatile u32 *)0x11000000u + ((M2_SPR_TEX_Y + ty) >> 1) * 256u + ((M2_SPR_TEX_X + tx) >> 2);
+    int r;
+    for (r = 0; r < 8; r += 2, T += 256) {
+        u32 a = ~rows[r], b = ~rows[r + 1];                    /* texel = pen ^ 0xF */
+        u32 t = (a & 0xff00ff00u) | ((b >> 8) & 0x00ff00ffu); /* a0a1 b0b1 a4a5 b4b5 */
+        u32 u = ((a << 8) & 0xff00ff00u) | (b & 0x00ff00ffu); /* a2a3 b2b3 a6a7 b6b7 */
+        T[0] = (u & 0xffff0000u) | (t >> 16);
+        T[1] = (u << 16) | (t & 0xffffu);
+    }
+}
+
+/* Draw the atlas rectangle (tu,tv) w x h 1:1 with its top-left at screen (x,y), in colorbase cb
+ * (palette mode, or a mask's colour), cut to the clip rectangle. flags: M2_SPR_FLIPX / FLIPY.
+ * One quad; nothing when the frame's M2_SPR_MAX_QUADS are used. */
+static void m2_spr_draw_tex(int x, int y, int w, int h, u32 tu, u32 tv, u32 flags, u32 cb, int layer) {
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    u32 cu0, cv0, cu1, cv1, u0, u1, v0, v1;
+    if (x0 < m2_spr_clip_x0) x0 = m2_spr_clip_x0;
+    if (y0 < m2_spr_clip_y0) y0 = m2_spr_clip_y0;
+    if (x1 > m2_spr_clip_x1) x1 = m2_spr_clip_x1;
+    if (y1 > m2_spr_clip_y1) y1 = m2_spr_clip_y1;
+    if (x0 >= x1 || y0 >= y1 || m2__spr_nq >= M2_SPR_MAX_QUADS) return;
+    if (layer < 0) layer = 0;
+    if (layer >= M2_SPR_LAYERS) layer = M2_SPR_LAYERS - 1;
+    cu0 = (u32)(x0 - x); cu1 = (u32)(x1 - x); cv0 = (u32)(y0 - y); cv1 = (u32)(y1 - y);
+    if (flags & M2_SPR_FLIPX) { u32 a = (u32)w - cu1; cu1 = (u32)w - cu0; cu0 = a; }
+    if (flags & M2_SPR_FLIPY) { u32 a = (u32)h - cv1; cv1 = (u32)h - cv0; cv0 = a; }
+    u0 = (tu + cu0) * 8u; u1 = (tu + cu1) * 8u; v0 = (tv + cv0) * 8u; v1 = (tv + cv1) * 8u;
+    if (flags & M2_SPR_FLIPX) { u32 a = u0; u0 = u1; u1 = a; }
+    if (flags & M2_SPR_FLIPY) { u32 a = v0; v0 = v1; v1 = a; }
+    m2__spr_quad(x0, y0, x1, y1, u0, v0, u1, v1, cb, layer);
 }
 
 #endif /* M2_SPRITE_H */
