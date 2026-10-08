@@ -96,8 +96,8 @@ extern void fault_selftest(void);
  * The vblank ISR (i_handle.s) runs every frame regardless of what the app does, so it
  * can abort even a non-polling `while(1)` app. When `armed` (an app is running), the ISR
  * aborts if EITHER trigger fires: `request` (a host writes 1 — bridge-pokeable, the
- * MAME-testable path AND the silicon host path once an RX IRQ exists) OR the SERVICE
- * button (IN0 bit2 active-low — the silicon operator trigger). On abort it pivots to
+ * MAME-testable path AND the silicon host path once an RX IRQ exists) OR the TEST
+ * button (IN0 bit2 active-low, MAME's "Service Mode" — the silicon operator trigger). On abort it pivots to
  * `recover_sp` and branches to `recover_fn` (gs_break_recover) — the same fresh-stack
  * re-entry the fault handler uses. FIXED @0x5F0020; i_handle.s reads these offsets in asm. */
 typedef struct {
@@ -105,7 +105,7 @@ typedef struct {
     u32 request;     /* +4  host/kernel writes 1 -> abort at the next vblank          */
     u32 recover_fn;  /* +8  ISR branches here on abort (must not return)              */
     u32 recover_sp;  /* +12 fresh frame base for the recovery entry                   */
-    u32 count;       /* +16 breaks since cold RAM (post-mortem; survives soft reset)  */
+    u32 count;       /* +16 breaks since m2_break_arm (post-mortem)                   */
 } m2_break_t;        /* 20 bytes */
 
 #define M2_BREAK_ADDR 0x005F0020u    /* FIXED — i_handle.s reads these offsets in asm */

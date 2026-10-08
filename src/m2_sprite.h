@@ -219,24 +219,34 @@ static void m2_spr_frame_setup(void) {
     m2__spr_frame++;
 }
 
+/* Index of the highest set bit of a != 0 (the i960's scanbit; __builtin_clz would call libgcc) */
+static u32 m2__spr_msb(u32 a) {
+    u32 m;
+    __asm__("scanbit %1,%0" : "=r"(m) : "r"(a));
+    return m;
+}
+
 /* IEEE-754 bits of v * 2^-k, for |v| < 2^24 (exact; keeps soft-float out of the draw path) */
 static u32 m2__spr_f(int v, int k) {
-    u32 s = 0, a = (u32)v, e = 23;
+    u32 s = 0, a = (u32)v, m;
     if (v == 0) return 0;
     if (v < 0) { s = 0x80000000u; a = (u32)-v; }
-    while (!(a & 0x800000u)) { a <<= 1; e--; }
-    return s | ((127u + e - (u32)k) << 23) | (a & 0x7FFFFFu);
+    m = m2__spr_msb(a);
+    return s | ((127u + m - (u32)k) << 23) | ((a << (23u - m)) & 0x7FFFFFu);
 }
 
 #ifdef M2_SPR_COP
-/* IEEE-754 bits of n/3 * 2^-k, for 0 <= n < 512 (to ~2^-22: model 456 is 12 units wide) */
+/* IEEE-754 bits of n/3 * 2^-k, for 0 <= n < 2^24 (to ~2^-22: model 456 is 12 units wide). n is
+ * shifted up by 23 bits, or as far as fits in 32 (n << 23 overflowed for n >= 512), before the
+ * divide. */
 static u32 m2__spr_f3(u32 n, int k) {
-    u32 a, e = 0;
+    u32 a, m, sh;
     if (n == 0) return 0;
-    a = (n << 23) / 3u;                                             /* n/3 = a * 2^-23 */
-    while (a >= 0x1000000u) { a >>= 1; e++; }
-    while (!(a & 0x800000u)) { a <<= 1; e--; }
-    return ((127u + e - (u32)k) << 23) | (a & 0x7FFFFFu);
+    sh = 31u - m2__spr_msb(n); if (sh > 23u) sh = 23u;
+    a = (n << sh) / 3u;                                             /* n/3 = a * 2^-sh */
+    m = m2__spr_msb(a);
+    a = m > 23u ? a >> (m - 23u) : a << (23u - m);                  /* 24-bit mantissa */
+    return ((127u + m - sh - (u32)k) << 23) | (a & 0x7FFFFFu);
 }
 
 /* The screen rectangle as model 456 (12x12 units in XZ, centred) through the COP: turned to face
@@ -253,16 +263,7 @@ static void m2__spr_cop_quad(int x0, int y0, int x1, int y1, u32 tpa, u32 tha, i
     *cf = COP_ANG_Z; *cf = 0u;
     *cf = COP_SCALE;                                                /* size * 2^-k / 12 */
     *cf = m2__spr_f3((u32)(x1 - x0), k + 2); *cf = 0x3F800000u; *cf = m2__spr_f3((u32)(y1 - y0), k + 2);
-    *cf = COP_FADD; *cf = COP_FADD; *cf = COP_FADD;                 /* fence, then commit (m2_obj_submit) */
-    cop_drain(cf, 1u);
-    { u32 wr = *(volatile u32 *)COP_WPOS_REG;
-      *(volatile u32 *)GEO_WRITE_REG = wr + 0x48u;
-      *cf = COP_SUBMIT; *cf = wr; *cf = 0u;
-      *cf = tpa; *cf = tha; *cf = mdl[2]; *cf = mdl[3];
-      *cf = g_cop_p2; *cf = g_cop_p;
-      g_cop_p2 = *cf; g_cop_p = *cf;
-      { u32 ep = *(volatile u32 *)COP_WPOS_REG;
-        *(volatile u32 *)(GEO_BUFFERRAM + (ep & 0x0001FFFCu)) = GEO_OP_END; } }
+    m2__obj_commit(cf, tpa, tha, mdl[2], mdl[3]);
 }
 #endif
 

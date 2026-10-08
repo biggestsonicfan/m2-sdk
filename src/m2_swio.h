@@ -64,12 +64,16 @@ M2_API void read_sw(void) {
 
     io[0x00] = 1;                           /* bank 1: coin / service on IN0 */
     b   = io[0x02];
+    io[0x00] = 0;                           /* back to bank 0: this runs in the vblank ISR, and
+                                             * a foreground m2_start/m2_player that it interrupts
+                                             * between its own bank write and its IN0 read would
+                                             * get bank 1's EEPROM bit as a phantom START2 */
     top = 0xFFu;
     if (!(b & 0x80u)) top &= ~(1u << 2);
     if (!(b & 0x40u)) top &= ~(1u << 3);
     word |= top << 24;                      /* -> byte3                      */
 
-    /* STF start-bit canonicalisation: fold bit10->bit11 (P1) and bit18->bit19 (P2). */
+    /* STF start-bit canonicalisation: a press on bit11 (P1) / bit19 (P2) moves to bit10 / bit18. */
     if (!(word & (1u << 11))) { word &= ~(1u << 10); word |= (1u << 11); }
     if (!(word & (1u << 19))) { word &= ~(1u << 18); word |= (1u << 19); }
 

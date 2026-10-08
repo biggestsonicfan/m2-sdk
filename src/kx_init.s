@@ -222,7 +222,7 @@ clear_work_ram_hi:
 copy_rom_to_main_ram:
 		shlo    17,1,g0						# g0 = 0x20000
 		lda     0x0,g4						# g4 = 0x0
-		lda     0x0,g1						# g1 = 0x1
+		lda     0x0,g1						# g1 = 0x0
 		lda     0x200000,g2					# g2 = 0x200000
 		bal     move_data					# burstcopy(g0 longs from g1 to g2, offset g4)
 
@@ -504,7 +504,7 @@ _copro_upload_code:
 		shlo    19,19,r4					# r4 = 0x00980000
 		st      r3,(r4)
 
-		shlo    19,17,r5					# r4 = 0x00880000
+		shlo    19,17,r5					# r5 = 0x00880000
 		lda     0x2800020,r6
 		lda     0x2801fc0,r7
 

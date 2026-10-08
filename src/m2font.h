@@ -9,7 +9,7 @@
 #ifndef M2FONT_H
 #define M2FONT_H
 
-static const unsigned char gFont[] =
+static const unsigned char gFont[128 * 32] =   /* 127 glyphs; 127 (DEL) is blank */
 {
 	0x00,0x00,0x00,0x00,
 	0x00,0x00,0x00,0x00,

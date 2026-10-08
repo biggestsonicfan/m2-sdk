@@ -72,7 +72,8 @@ _irq_vblank:
 
 	# ---- BREAK-IN: abort a running/hung app back to the monitor (m2_fault.h m2_break_t
 	# @0x5F0020). Gated on `armed` so the boot/manager fast-path is unaffected. Triggers:
-	# `request` (host writes 1 -> bridge-pokeable) OR the SERVICE button (IN0 bit2, low).
+	# `request` (host writes 1 -> bridge-pokeable) OR the TEST button (IN0 bit2, low;
+	# MAME's "Service Mode" input, not SERVICE1 = bit3).
 	# On abort: ack, count++, pivot to recover_sp, branch to recover_fn (never returns).
 	# Only r3-r7/r13 + g0 are used; r3 (scratch-frame base) is re-derived in vbl_restore.
 	lda     0x005F0020, r4			# m2_break
@@ -80,11 +81,11 @@ _irq_vblank:
 	cmpobe  0, r5, vbl_restore		# not armed -> normal return (no app running)
 	ld      4(r4), r5				# request set (host)?
 	cmpobne 0, r5, vbl_break
-	lda     0x01C00000, r6			# else poll SERVICE (IN0 bit2, active-low)
+	lda     0x01C00000, r6			# else poll TEST (IN0 bit2, active-low)
 	mov     0, g0					# bank register is WRITE-only; the SDK input helpers
 	stob    g0, (r6)				# set bank=0 before every read, so leaving it 0 is safe
 	ldob    2(r6), g0				# read IN0 (system inputs)
-	bbc     2, g0, vbl_break		# bit2 (SERVICE) clear = pressed -> abort
+	bbc     2, g0, vbl_break		# bit2 (TEST) clear = pressed -> abort
 	b       vbl_restore
 
 vbl_break:
@@ -131,10 +132,12 @@ vbl_restore:
 	.globl	_other_irq
 	.globl	_intr_halt
 
-# VsyncObj (STF vector 13 @0xD10): just ACK (clear bit2).
+# VsyncObj (STF vector 13 @0xD10): just ACK. irq_control_word routes IRQ1 here, and
+# MAME raises IRQ1 from request bit1 only (irq_update), so clear bit1 (this once
+# cleared bit2, a timer bit, and left its own source asserted).
 _vsync_obj:
 	lda     0x00e80000,r4
-	subo    5,0,r5					# r5 = 0xFFFFFFFB
+	subo    3,0,r5					# r5 = 0xFFFFFFFD
 	st      r5,(r4)					# ack (STF VsyncObj)
 	ret
 
@@ -150,15 +153,20 @@ _timer_irq:
 	st      g0,(g1)					# TIMER_04 = 0xFFFFF
 	lda     1,g0
 	st      g0,_timerFlag			# byte_50008C = 1
+	lda     0x00e80000,r4			# ack: IRQ2 = request bits 2-9 (the four timers are
+	lda     0xfffffc03,r5			# bits 2-5); unacked, the line stays asserted
+	st      r5,(r4)
 	subo    16,sp,sp
 	ldq     (sp),g0
 	ret
 
 # Other (STF vector 15 @0xDF0): STF checks IRQ bit10 -> send_sound_code (absent
-# here). Just ACK defensively.
+# here). Just ACK defensively. The request register is ack-by-AND (MAME
+# irq_ack_w: m_intreq &= data), so clear the sources that land here, bits 10-11;
+# writing all ones (as this once did) acks nothing and would let them storm.
 _other_irq:
 	lda     0x00e80000,r4
-	subi    1,0,r5					# r5 = 0xFFFFFFFF
+	lda     0xfffff3ff,r5			# r5 = ~0xC00
 	st      r5,(r4)					# ack
 	ret
 
@@ -195,8 +203,8 @@ _irq_serial:
 	ldq     (sp),g0					# pop from stack
 
 	lda     0x00e80000,r4
-	lda     0x0400,r5
-	st      r5,(r4)					# clear irq
+	lda     0xfffffbff,r5			# ~0x400: ack-by-AND (MAME irq_ack_w), so clear
+	st      r5,(r4)					# only bit10 (0x400 would clear every other request)
 	ret
 
 
