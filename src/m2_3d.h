@@ -155,8 +155,8 @@ static void m2_3d_boot(void) {
 #if defined(M2_BOARD_2A)
 /* Model 2A: the COP is a TGP (MB86234). It runs the SDK's own program, src/m2_tgp_kernel.s
  * (assembled into m2_tgp_kernel.h by tools/tgpasm.py), which answers the same FIFO protocol
- * for the scalar, trig and vector commands; see the list at the top of the .s file. The bone
- * matrix commands and COP_SUBMIT are not in it. Upload as Dynamite Cop's 2A program does
+ * for the scalar, trig, vector and matrix commands, PUSH/POP and COP_SUBMIT; see the list at
+ * the top of the .s file. Upload as Dynamite Cop's 2A program does
  * (model2.cpp copro_ctl1_w / copro_fifo_w): CTL bit31 set = halt and point the loader at
  * program word 0, every FIFO write then stores one 32-bit program word, CTL bit31 clear = run. */
 #include "m2_tgp_kernel.h"

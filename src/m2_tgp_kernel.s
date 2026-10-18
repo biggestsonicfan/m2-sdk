@@ -10,15 +10,18 @@
 ; Semantics follow STF's cpres1 as recorded in m2-hle (src/board/sharc_exec.h, checked
 ; against MAME): same argument order, same results. That covers the math commands and the
 ; matrix ones m2_obj_submit sends (IDENTITY, SET_POS, ANG_X/Y/Z, SCALE) plus RMATRIX to read
-; the matrix back, and ATAN2 (the azimuth m2_obj_frame_setup asks for). There is one matrix
-; (no PUSH/POP stack), and no SUBMIT yet.
+; the matrix back, ATAN2 (the azimuth m2_obj_frame_setup asks for), the PUSH/POP matrix
+; stack, and SUBMIT (0x78), which writes the matrix and the object into buffer RAM for the
+; geometrizer.
 ; Commands not listed in the table are ignored (their arguments would then be read as
 ; commands: don't send them on 2A).
 ;
 ; Hardware used (MAME src/mame/sega/model2.cpp, copro_tgp_*): rf1 = input FIFO (a read
 ; waits for data), rf2 = output FIFO, io 0x20/0x21 = sin/cos of a 16-bit angle, io
 ; 0x28/0x29 = reciprocal seed, io 0x2a/0x2b = 1/sqrt seed. The divide and square-root
-; sequences are the ones Dynamite Cop's 2A program uses with those tables.
+; sequences are the ones Dynamite Cop's 2A program uses with those tables. rf3 = bank: with
+; 0x400000 in it, io 0x0000-0x7fff is buffer RAM (i960 0x900000) and the tables are hidden,
+; so SUBMIT sets it back to 0 when it is done.
 ;
 ; Assemble: python3 tools/tgpasm.py src/m2_tgp_kernel.s --header src/m2_tgp_kernel.h --name m2_tgp_kernel
 
@@ -40,6 +43,19 @@
 .equ BW, 0x7c
 .equ G,  0x7d
 .equ NU, 0x7e
+
+.equ DEP, 0x50          ; matrix stack: depth, and the offset of the next free slot (12 per slot)
+.equ SPX, 0x51          ; the slots are data RAM 0x200 + 12*n
+.equ KMAT, 0x52         ; GEO command words SUBMIT writes: matrix (0x05800b0b), object (0x00800101)
+.equ KOBJ, 0x53
+.equ SFL, 0x54          ; SUBMIT: its arguments, obc >> 14, obc & 0xffff, and the first result
+.equ STPA, 0x55
+.equ STHA, 0x56
+.equ SOBA, 0x57
+.equ SOBC, 0x58
+.equ SHI, 0x59
+.equ SNF, 0x5a
+.equ SP2, 0x5b
 
 ; The current matrix, laid out as cpres1 keeps its bone slot (m2-hle sharc_exec.h, Fn_get_matrix):
 ; three rotation columns, then the translation T. A point p maps to col0*p.x + col1*p.y + col2*p.z + T.
@@ -67,6 +83,21 @@ irq:    iret
 start:  set #0x0800             ; same start-up state as Dynamite Cop's program
         ldi #0x2, mask
         stmh fp rz              ; float mode, round toward zero (as Dynamite Cop runs)
+        ldi #0, d               ; empty matrix stack
+        mov d, $DEP
+        mov d, $SPX
+        mov d, rf3              ; bank off: io is the tables
+        ldi #16, sft
+        lid #0x0580
+        lsld
+        lia #0x0b0b
+        orad
+        mov d, $KMAT            ; 0x05800b0b
+        lid #0x0080
+        lsld
+        lia #0x0101
+        orad
+        mov d, $KOBJ            ; 0x00800101
         brif alw #ident         ; start with the identity matrix
 
 loop:   mov rf1, b              ; command word
@@ -546,6 +577,106 @@ rmat:   mov $C0X, rf2           ; 0x05 -> col0, col1, col2, T (the slot as cpres
 ; ---- subroutines ----------------------------------------------------------------------------
 
 ; p = (next - next)^2 from two FIFO words.
+; ---- matrix stack (cpres1 Fn_push_matrix / Fn_pop_matrix) ----------------------------------
+; cpres1 has 8 slots and moves its current-slot pointer. Here the current matrix stays at
+; 0x60 and PUSH copies it into the next slot, POP copies the slot back: the same results.
+; cpres1 counts the depth in its jump's delay slots, so the count goes on past a full stack:
+; PUSH at depth >= 7 and POP at depth >= 8 only change the count, and POP at depth 0 does
+; nothing. After 8 pushes the first POP leaves the matrix as it is.
+
+push:   mov $DEP, d             ; 0x01: depth++, and below depth 7 save the matrix
+        lia #1
+        addd
+        mov d, $DEP
+        lia #8
+        subd
+        brif ged #loop          ; the old depth was >= 7
+        mov $SPX, x1
+        ldi #C0X, x0
+        rep #12
+        mov (x0+1), (x1+1)+0x200
+        mov $SPX, d
+        lia #12
+        addd
+        mov d, $SPX
+        brif alw #loop
+
+pop:    mov $DEP, d             ; 0x02: depth--, and below depth 8 restore the matrix
+        lia #0
+        orad
+        brif zrd #loop          ; depth 0: nothing
+        lia #1
+        subd
+        mov d, $DEP
+        lia #7
+        subd
+        brif ged #loop          ; the old depth was >= 8
+        mov $SPX, d
+        lia #12
+        subd
+        mov d, $SPX
+        mov $SPX, x0
+        ldi #C0X, x1
+        rep #12
+        mov (x0+1)+0x200, (x1+1)
+        brif alw #loop
+
+; ---- SUBMIT (cpres1 Fn_put_poly, stf-sharc cpres1.asm) ---------------------------------------
+; In: wr, flag, tpa, tha, oba, obc, p2, p. Writes 18 words to buffer RAM at byte offset wr:
+; 0x05800b0b, the 12 matrix words, 0x00800101, tpa, tha, oba, obc & 0xffff. Out: p2, p + n,
+; where n = obc & 0xffff. With flag != 0 it also adds obc >> 14 to tha and n to p2.
+
+submit: mov rf1, d              ; 0x78
+        ldi #2, sft
+        lsrd
+        mov d, x1               ; buffer RAM word index
+        mov rf1, $SFL
+        mov rf1, $STPA
+        mov rf1, $STHA
+        mov rf1, $SOBA
+        mov rf1, $SOBC
+        lid #0x400000
+        mov d, rf3              ; io = buffer RAM
+        mov $KMAT, (x1+1) (e)
+        ldi #C0X, x0
+        rep #12
+        mov (x0+1), (x1+1) (e)
+        mov $KOBJ, (x1+1) (e)
+        mov $STPA, (x1+1) (e)
+        mov $SOBC, d
+        ldi #14, sft
+        lsrd
+        mov d, $SHI             ; obc >> 14
+        mov $SOBC, d
+        lia #0xffff
+        andd
+        mov d, $SNF             ; n = obc & 0xffff
+        mov $SFL, d
+        lia #0
+        orad
+        brif zrd #subnf
+        mov $STHA, d
+        mov $SHI, a
+        addd
+        mov d, $STHA            ; tha += obc >> 14
+        mov rf1, d
+        mov $SNF, a
+        addd
+        mov d, $SP2             ; p2 + n
+        brif alw #subw
+subnf:  mov rf1, $SP2           ; p2
+subw:   mov $STHA, (x1+1) (e)
+        mov $SOBA, (x1+1) (e)
+        mov $SNF, (x1+1) (e)
+        ldi #0, d
+        mov d, rf3              ; io = the tables again
+        mov $SP2, rf2
+        mov rf1, d
+        mov $SNF, a
+        addd
+        mov d, rf2              ; p + n
+        brif alw #loop
+
 sqdiff: mov rf1, a
         mov rf1, d
         fsbd
@@ -749,8 +880,8 @@ divp:   mov a, $DN
 .equ NONE, loop
 table:
         brif alw #NONE          ; 00
-        brif alw #NONE          ; 01
-        brif alw #NONE          ; 02
+        brif alw #push          ; 01 PUSH
+        brif alw #pop           ; 02 POP
         brif alw #ident         ; 03 IDENTITY
         brif alw #NONE          ; 04
         brif alw #rmat          ; 05 RMATRIX
@@ -843,4 +974,6 @@ table:
         brif alw #add3          ; 5c ADD3
         brif alw #sub3          ; 5d SUB3
         brif alw #scale3        ; 5e SCALE3
-        .fill 0x100 - 0x5f, brif alw #NONE  ; 5f..ff
+        .fill 0x78 - 0x5f, brif alw #NONE   ; 5f..77
+        brif alw #submit        ; 78 SUBMIT
+        .fill 0x100 - 0x79, brif alw #NONE  ; 79..ff

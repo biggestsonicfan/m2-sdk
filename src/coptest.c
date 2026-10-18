@@ -5,8 +5,9 @@
  * program src/m2_tgp_kernel.s on 2A), sends each scalar / trig / vector command through the
  * COP FIFO and compares the result with the i960's own float math. One line per command on
  * screen (OK or BAD, result bits, expected bits) and a total at the bottom. Then twelve lines
- * for the current matrix after the transform commands m2_obj_submit sends (RMATRIX), and
- * eight ATAN2 angles.
+ * for the current matrix after the transform commands m2_obj_submit sends (RMATRIX), eight
+ * ATAN2 angles, the PUSH/POP matrix stack, and SUBMIT (the 18 words it writes to buffer RAM
+ * and the two counts it returns).
  *
  *   cmake ... -DM2_GAME=coptest -DM2_BOARD=2A     run on dynamcop
  *   cmake ... -DM2_GAME=coptest                   run on sfight (2B, needs cpres1.h)
@@ -20,12 +21,13 @@
 #include "m2_3d.h"
 
 #define NTEST 64
-#define NROW 18     /* lines per column on screen */
+#define NROW 20     /* lines per column on screen */
 volatile u32 g_cop_result[NTEST];
 volatile u32 g_cop_bad;
 volatile u32 g_cop_done;
 
 static u32 fbits(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }
+static float bitsf(u32 u) { union { float f; u32 u; } x; x.u = u; return x.f; }
 
 static float dist2d(float x1, float x2, float z1, float z2) {   /* COP_DIST2D, (x1,x2,z1,z2) */
     m2_cop(COP_DIST2D); m2_cop_pf(x1); m2_cop_pf(x2); m2_cop_pf(z1); m2_cop_pf(z2);
@@ -58,21 +60,16 @@ static void hex8(char *p, u32 v) {
     for (i = 0; i < 8; i++) p[i] = "0123456789ABCDEF"[(v >> (28 - 4 * i)) & 0xF];
 }
 
-/* got/want as floats, within 1e-5 relative (the TGP's divide and square root start from a
- * table seed with one correction step, so they are not bit-exact). */
-static void check(const char *name, float got, float want) {
-    float err = got - want, mag = want < 0 ? -want : want;
+static void report(const char *name, int ok, u32 got, u32 want) {
     char line[40];
-    int i, n, ok;
-    if (err < 0) err = -err;
-    ok = err <= (mag > 1.0f ? mag : 1.0f) * 1e-5f;
+    int i, n;
     for (i = 0; i < 39; i++) line[i] = ' ';
     line[39] = 0;
     for (n = 0; name[n] && n < 9; n++) line[n] = name[n];
     line[10] = ok ? 'O' : 'B'; line[11] = ok ? 'K' : 'A'; line[12] = 'D';
-    hex8(line + 14, fbits(got));
-    hex8(line + 23, fbits(want));
-    if (n_line < NTEST) g_cop_result[n_line] = fbits(got);
+    hex8(line + 14, got);
+    hex8(line + 23, want);
+    if (n_line < NTEST) g_cop_result[n_line] = got;
     if (!ok) g_cop_bad++;
     /* on screen: the name in green, or "name BAD result-bits" in red (a frame's display list holds ~390
      * glyphs, spaces included, so an OK line stops at the name); the UART gets every line in full,
@@ -85,8 +82,92 @@ static void check(const char *name, float got, float want) {
         m2_uart_puts(line); m2_uart_puts("\r\n");
     }
 }
+/* got/want as floats, within 1e-5 relative (the TGP's divide and square root start from a
+ * table seed with one correction step, so they are not bit-exact). */
+static void check(const char *name, float got, float want) {
+    float err = got - want, mag = want < 0 ? -want : want;
+    if (err < 0) err = -err;
+    report(name, err <= (mag > 1.0f ? mag : 1.0f) * 1e-5f, fbits(got), fbits(want));
+}
 static void checki(const char *name, int got, int want) {
     check(name, (float)got, (float)want);
+}
+/* n words, bit for bit; a failing line shows the first word that differs. */
+static void checkw(const char *name, const u32 *got, const u32 *want, int n) {
+    int i;
+    for (i = 0; i < n - 1 && got[i] == want[i]; i++) ;
+    report(name, got[i] == want[i], got[i], want[i]);
+}
+
+static void rmatrix_bits(u32 m[12]) {
+    int i;
+    m2_cop(COP_RMATRIX);
+    for (i = 0; i < 12; i++) m[i] = M2_COPFIFO;
+}
+
+/* PUSH saves the matrix, POP brings it back. cpres1 has 8 slots and keeps 7 pushes; it still
+ * counts the 8th, so the first POP after it leaves the matrix alone. A POP on an empty stack
+ * changes nothing (stf-sharc cpres1.asm Fn_push_matrix/Fn_pop_matrix). */
+static void stack_tests(void) {
+    u32 a[12], b[12], c[12];
+    int k;
+    m2_cop(COP_IDENTITY);
+    m2_cop(COP_SET_POS); m2_cop_pf(1.0f); m2_cop_pf(2.0f); m2_cop_pf(3.0f);
+    rmatrix_bits(a);
+    m2_cop(COP_PUSH);
+    m2_cop(COP_ANG_Y); m2_cop_pi(0x2000);
+    m2_cop(COP_SET_POS); m2_cop_pf(5.0f); m2_cop_pf(0.0f); m2_cop_pf(0.0f);
+    rmatrix_bits(b);
+    m2_cop(COP_PUSH);
+    m2_cop(COP_SCALE); m2_cop_pf(2.0f); m2_cop_pf(2.0f); m2_cop_pf(2.0f);
+    m2_cop(COP_POP);
+    rmatrix_bits(c);
+    checkw("pop", c, b, 12);
+    m2_cop(COP_POP);
+    rmatrix_bits(c);
+    checkw("pop2", c, a, 12);
+    m2_cop(COP_POP);                    /* empty: no change */
+    rmatrix_bits(c);
+    checkw("pop0", c, a, 12);
+    m2_cop(COP_IDENTITY);               /* 8 pushes, T.x = 1..8 before each: the 8th isn't saved */
+    for (k = 0; k < 8; k++) {
+        m2_cop(COP_SET_POS); m2_cop_pf(1.0f); m2_cop_pf(0.0f); m2_cop_pf(0.0f);
+        m2_cop(COP_PUSH);
+    }
+    m2_cop(COP_POP);
+    rmatrix_bits(c);
+    check("push8", bitsf(c[9]), 8.0f);
+    for (k = 0; k < 7; k++) m2_cop(COP_POP);
+    rmatrix_bits(c);
+    check("pop8", bitsf(c[9]), 1.0f);
+}
+
+/* SUBMIT (wr, flag, tpa, tha, oba, obc, p2, p) writes 0x05800b0b, the 12 matrix words,
+ * 0x00800101, tpa, tha, oba, obc & 0xffff to buffer RAM at wr and returns p2 and p + n
+ * (n = obc & 0xffff); a nonzero flag also adds obc >> 14 to tha and n to p2 (stf-sharc
+ * cpres1.asm Fn_put_poly). wr is the GEO write cursor, which the test leaves where it is, so the
+ * frame's display list writes over these words afterwards. */
+static void submit_test(const char *nw, const char *nr, u32 flag) {
+    volatile u32 *cf = (volatile u32 *)M2_COPFIFO_ADDR;
+    const u32 tpa = 0x11111111u, tha = 0x00800010u, oba = 0x00123456u, obc = 0x00050003u;
+    u32 want[18], got[18], wr, r[2], rw[2];
+    int i;
+    m2_cop(COP_IDENTITY);
+    m2_cop(COP_SET_POS); m2_cop_pf(1.5f); m2_cop_pf(-2.0f); m2_cop_pf(3.0f);
+    m2_cop(COP_ANG_Y); m2_cop_pi(0x2000);
+    m2_cop(COP_SCALE); m2_cop_pf(2.0f); m2_cop_pf(0.5f); m2_cop_pf(-3.0f);
+    rmatrix_bits(want + 1);
+    want[0] = 0x05800b0bu; want[13] = 0x00800101u;
+    want[14] = tpa; want[15] = flag ? tha + (obc >> 14) : tha; want[16] = oba; want[17] = obc & 0xffffu;
+    wr = *(volatile u32 *)COP_WPOS_REG & 0x1fffcu;
+    *cf = COP_SUBMIT; *cf = wr; *cf = flag;
+    *cf = tpa; *cf = tha; *cf = oba; *cf = obc;
+    *cf = 7u; *cf = 40u;
+    r[0] = *cf; r[1] = *cf;
+    for (i = 0; i < 18; i++) got[i] = *(volatile u32 *)(GEO_BUFFERRAM + wr + 4u * i);
+    checkw(nw, got, want, 18);
+    rw[0] = flag ? 10u : 7u; rw[1] = 43u;
+    checkw(nr, r, rw, 2);
 }
 
 static void run_tests(void) {
@@ -162,6 +243,9 @@ static void run_tests(void) {
     checki("atan180", (int)m2_cop_atan2(4.0f, 1.0f, -2.0f, -2.0f),   0x7fff);   /* (-3,  0)     */
     checki("atan0",   (int)m2_cop_atan2(-2.0f, 3.0f, 0.0f, 0.0f),    0);        /* ( 5,  0)     */
     checki("atan00",  (int)m2_cop_atan2(2.5f, 2.5f, 1.0f, 1.0f),     0);        /* ( 0,  0)     */
+    stack_tests();
+    submit_test("sub", "subr", 0u);
+    submit_test("subf", "subfr", 1u);
 }
 
 int main(void) {

@@ -50,7 +50,8 @@ Supported commands. Argument order and results are the same as cpres1:
 | Scalar | `FADD` `FSUB` `FMUL` `FDIV` `INT2F` `F2INT` `SQRT` |
 | Trig (16-bit angle) | `SIN` `COS` `TAN` `SINSCALE` `COSSCALE` `ATAN2` |
 | Vector | `DIST2D` `DIST3D` `MAG2D` `DOT2D` `ADD3` `SUB3` `SCALE3` |
-| Matrix | `IDENTITY` `SET_POS` `SCALE` `ANG_X` `ANG_Y` `ANG_Z` `RMATRIX` |
+| Matrix | `IDENTITY` `SET_POS` `SCALE` `ANG_X` `ANG_Y` `ANG_Z` `RMATRIX` `PUSH` `POP` |
+| Display list | `SUBMIT` |
 
 Any other command is ignored. Its arguments are then read as commands, so don't send
 one on 2A. `m2_fastmath.h` (the default) does the scalar math on the i960 and works on
@@ -72,10 +73,36 @@ The kernel keeps one matrix, laid out as cpres1's: three columns, then the trans
 Here s and c are the sine and cosine of the 16-bit angle `a`. The formulas are m2-hle2's
 cpres1 model (`src/board/sharc_exec.h`).
 
-Still missing on 2A, so `m2_obj.h` doesn't run there yet:
+`PUSH` and `POP` work as cpres1's (stf-sharc `cpres1.asm`, `Fn_push_matrix` /
+`Fn_pop_matrix`). There are 8 slots, so 7 pushes are saved. cpres1 updates the depth in
+its jump's delay slots, so the depth goes on counting past a full stack. A `PUSH` at depth
+7 or more changes only the count, and so does a `POP` at depth 8 or more. After 8 pushes
+the first `POP` leaves the matrix as it is. A `POP` at depth 0 does nothing.
 
-- `SUBMIT` (0x78), the object submit in `m2_obj_submit()`.
-- The matrix stack (`PUSH`/`POP`), `WMATRIX` and the bone commands.
+Still missing on 2A: `WMATRIX` and the bone commands.
+
+### SUBMIT
+
+`SUBMIT wr flag tpa tha oba obc p2 p` (0x78, cpres1 `Fn_put_poly`) is the commit in
+`m2_obj_submit()`. It writes 18 words (0x48 bytes) to buffer RAM at byte offset `wr`:
+
+| Words | Value |
+|---|---|
+| 0 | `0x05800b0b`, the GEO matrix command |
+| 1-12 | the current matrix (col0, col1, col2, T) |
+| 13 | `0x00800101`, the GEO object command |
+| 14-17 | `tpa`, `tha`, `oba`, `obc & 0xffff` |
+
+It returns `p2` and `p + n`, where n = `obc & 0xffff`. With a nonzero `flag`, it also adds
+`obc >> 14` to `tha` and n to `p2`. The SDK always sends `flag` = 0.
+
+The TGP reaches buffer RAM through its bank register: writing 0x400000 to `rf3` maps io
+0x0000-0x7fff to buffer RAM (model2.cpp `copro_tgp_memory_w`). That hides the sin/cos and
+divide tables, so `SUBMIT` writes 0 to `rf3` when it is done.
+
+The matrix, object and model addresses are the same on 2A, but the model table
+`m2_obj.h` uses (`M2_MODEL_TABLE`, model 456) is in STF's data ROM. On `dynamcop` that
+address holds Dynamite Cop's data, so the 3D path needs your own models there.
 
 `m2_silicon_boot()` itself sends one COP command, `m2_cop_initialize()` (command 0). It
 skips it on 2A. On 2B cpres1 needs that command before `RMATRIX` returns the matrix;
@@ -141,5 +168,16 @@ the i960 model of the formulas above. On `sfight` cpres1 differs from it by a fe
 and from 2A by at most 1.7e-6 relative. Most of that comes from the sine tables: cpres1's
 sin 45° is 0x3F3504F7, the TGP's 0x3F3504F3.
 
-The last eight lines are `ATAN2` on all four quadrants, both axes and (0, 0). Their expected
+Next come eight `ATAN2` lines: all four quadrants, both axes and (0, 0). Their expected
 words come from the cpres1 model, and `dynamcop` and `sfight` return the same eight words.
+
+The last nine lines test the matrix stack and `SUBMIT`. All of them must match exactly:
+
+- `pop`, `pop2`: the matrix after one and two `POP`s equals the one read before each `PUSH`.
+- `pop0`: a `POP` on an empty stack changes nothing.
+- `push8`, `pop8`: after 8 pushes, one `POP` leaves the matrix alone, and 8 bring back the first.
+- `sub`, `subf`: the 18 words in buffer RAM, with `flag` 0 and 1.
+- `subr`, `subfr`: the two counts `SUBMIT` returns.
+
+The test writes at the GEO write cursor and leaves it there, so the frame's display list
+writes over those words afterwards.
