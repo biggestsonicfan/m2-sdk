@@ -206,7 +206,19 @@ How it works:
   over the external bus (EB = 0x400000).
 
 MAME's MB86235 core (`mb86235ops.cpp`) has no absolute address mode (EA type 0x0c is a
-fatal error), so the kernel writes `A(@AR6+n)` with AR6 = 0, as Dynamite Cop does. Other
+fatal error), so the kernel writes `A(@AR6+n)` with AR6 = 0, as Dynamite Cop does.
+
+Why it is missing: MAME's interpreter has only the modes some game runs. It began in
+2018 (commit 3344b2f6) with eight modes and a fatal "unemulated decode_ea type" for the
+rest; the 2025 rewrite (1cd73332, #13718) added the modes the 2C games needed and renamed
+the error "illegal". No game needs 0x0c. The TGPx4 programs of every 2C set we have
+(bel, dynamcopc, hotd, segawski, skisuprg, topskatr, waverunr: six different programs,
+about 4,700 memory operands) never use it; they all address fixed words as `@ARn+disp`.
+The mode exists: MAME's disassembler prints it as `A(nnnH)` and the recompiler front end
+(`mb86235fe.cpp` `describe_ea`, "@disp") knows it. In the interpreter it would be one line
+in `decode_ea` (`case 0x0c: return disp;`), but no program can check it against a board.
+
+Other
 things the core does that matter when you write TGPx4 code: an instruction's control
 part (branch, call) runs before its ALU part, so a branch tests flags set by an earlier
 instruction; `FSUB x, y` is y - x; every branch has one delay slot, and `DCALL` returns
