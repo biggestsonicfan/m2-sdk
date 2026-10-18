@@ -16,6 +16,21 @@ if(NOT EXISTS "${CMAKE_SOURCE_DIR}/src/${M2_GAME}.c")
     message(FATAL_ERROR "SOURCE NOT FOUND: src/${M2_GAME}.c")
 endif()
 
+# Target board (src/m2_board.h). Each one names the program EPROM pair after the MAME set
+# the build replaces: 2B = sfight (Sonic the Fighters), 2A = dynamcop, 2C = dynamcopc
+# (Dynamite Cop, which shipped on all three boards).
+set(M2_BOARD "2B" CACHE STRING "Model 2 board: 2A, 2B or 2C")
+set_property(CACHE M2_BOARD PROPERTY STRINGS 2A 2B 2C)
+if(M2_BOARD STREQUAL "2A")
+    set(M2_ROM_NAMES epr-20930.12 epr-20931.13)
+elseif(M2_BOARD STREQUAL "2B")
+    set(M2_ROM_NAMES epr-19001.15 epr-19002.16)
+elseif(M2_BOARD STREQUAL "2C")
+    set(M2_ROM_NAMES epr-20952.15 epr-20953.16)
+else()
+    message(FATAL_ERROR "M2_BOARD must be 2A, 2B or 2C (got '${M2_BOARD}')")
+endif()
+
 # i960 startup + IRQ assembly (GNU syntax; assembled -AKB via the gcc driver).
 # kx_init.o(.text) is forced first by the linker script, so list order is free.
 set(M2_STARTUP_ASM
@@ -35,6 +50,7 @@ target_compile_options(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2>)
 # app-inside-a-kernel (GS_STANDALONE) build; a lone game .c has no kernel TU to collide
 # with, so it must be global or the link fails with undefined _kickGEO/_waitVBL/... .
 target_compile_definitions(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:M2_API=>)
+target_compile_definitions(game.elf PRIVATE M2_BOARD_${M2_BOARD})
 set_target_properties(game.elf PROPERTIES SUFFIX "")
 target_link_options(game.elf PRIVATE
     -nostdlib
@@ -67,9 +83,9 @@ add_custom_target(rom ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/roms"
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/stfbin2rom.py"
-            --input game.bin --output "${CMAKE_SOURCE_DIR}/roms"
+            --input game.bin --output "${CMAKE_SOURCE_DIR}/roms" --names ${M2_ROM_NAMES}
     COMMAND ${CMAKE_COMMAND} -E echo
-            "BUILD OK (${M2_GAME}):  roms/epr-19001.15  roms/epr-19002.16"
+            "BUILD OK (${M2_GAME}, Model ${M2_BOARD}):  roms/${M2_ROM_NAMES}"
     DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)

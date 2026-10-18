@@ -1034,18 +1034,38 @@ static const unsigned char gFont[128 * 32] =   /* 127 glyphs; 127 (DEL) is blank
  * previously copy-pasted as g2d_texel / m2__font_texel / m2__obj_texel and
  * g2d_font_atlas / m2_font_atlas; collapsed here so every path shares one impl. */
 
+/* 32-bit word widx of the texels in a texram bank (M2_BOARD_TEXRAM0/1). On 2B/2C that is the
+ * word at bank + 4*widx. 2A's texture RAM is 16 bits wide on a 32-bit bus: each bus word holds
+ * one halfword in its low 16 bits (MAME model2.cpp tex0_w/tex1_w), so word widx is the pair of
+ * bus words at bank + 8*widx. Reading it back assumes the same layout as the write. */
+static u32 m2_tex_rd32(u32 bank, u32 widx) {
+#if M2_BOARD_TEX_STRIDE == 2
+    volatile u32 *T = (volatile u32 *)bank + widx * 2u;
+    return (T[0] & 0xffffu) | (T[1] << 16);
+#else
+    return ((volatile u32 *)bank)[widx];
+#endif
+}
+static void m2_tex_wr32(u32 bank, u32 widx, u32 w) {
+#if M2_BOARD_TEX_STRIDE == 2
+    volatile u32 *T = (volatile u32 *)bank + widx * 2u;
+    T[0] = w & 0xffffu; T[1] = w >> 16;
+#else
+    ((volatile u32 *)bank)[widx] = w;
+#endif
+}
+
 /* set one 4-bit texel (val) at (x,y) in a texram BANK window's sheet 0 (same 2x2 swizzle) */
 static void m2_texram_texel_at(u32 bank, int x, int y, u8 val) {
-    volatile u32 *T0 = (volatile u32 *)bank;
     u32 offset = (u32)((y / 2) * 512 + (x / 2));
     u32 widx   = offset >> 1;
     int shift  = ((x & 1) ? 0 : 4) + ((y & 1) ? 0 : 8) + ((offset & 1) ? 16 : 0);
-    u32 w = T0[widx];
-    T0[widx] = (w & ~(0xFu << shift)) | ((u32)(val & 0xf) << shift);
+    u32 w = m2_tex_rd32(bank, widx);
+    m2_tex_wr32(bank, widx, (w & ~(0xFu << shift)) | ((u32)(val & 0xf) << shift));
 }
 
 /* set one 4-bit texel (val) at (x,y) in texram0 sheet 0 */
-static void m2_texram0_texel(int x, int y, u8 val) { m2_texram_texel_at(0x11000000u, x, y, val); }
+static void m2_texram0_texel(int x, int y, u8 val) { m2_texram_texel_at(M2_BOARD_TEXRAM0, x, y, val); }
 
 static int m2__font_loaded = 0;
 
@@ -1095,27 +1115,32 @@ static void m2__font_fill_shade(void) {
  * tiles by parity): apps mixing STF texture pages AND text should load pages FIRST — the
  * atlas stamp is once-guarded and later page loads would clobber it anyway. */
 static void m2_font_atlas(void) {
-    int c, gy, gx;
+    int x, y, dx, dy;
     if (m2__font_loaded) return;
-    for (c = 0; c < 128; c++) {
-        int ax = (c & 15) * 8, ay = (c >> 4) * 8;
-        for (gy = 0; gy < 8; gy++)
-            for (gx = 0; gx < 8; gx++) {
-                u8 t = m2__font_texel(c, gx, gy);
-                m2_texram_texel_at(0x11000000u, ax + gx, ay + gy, t);
-                m2_texram_texel_at(0x11200000u, ax + gx, ay + gy, t);   /* odd-bank insurance */
-            }
-    }
-#ifdef M2_TEX_CODEC_H
+    /* whole 32-bit words (4x2 texels, the m2_texram_texel_at layout), no read-back: faster,
+     * and 2A's texture RAM can't be read back in MAME (tex0_w only; see m2_tex_rd32) */
+    for (y = 0; y < 64; y += 2)
+        for (x = 0; x < 128; x += 4) {
+            u32 w = 0, widx = (u32)(y / 2) * 256u + (u32)(x / 4);
+            for (dy = 0; dy < 2; dy++)
+                for (dx = 0; dx < 4; dx++) {
+                    int tx = x + dx, ty = y + dy;
+                    u8 t = m2__font_texel((ty >> 3) * 16 + (tx >> 3), tx & 7, ty & 7);
+                    w |= (u32)t << (((tx & 1) ? 0 : 4) + ((ty & 1) ? 0 : 8) + ((tx & 2) ? 16 : 0));
+                }
+            m2_tex_wr32(M2_BOARD_TEXRAM0, widx, w);
+            m2_tex_wr32(M2_BOARD_TEXRAM1, widx, w);   /* odd-bank insurance */
+        }
+#if defined(M2_TEX_CODEC_H) && M2_BOARD_TEX_STRIDE == 1   /* the codec stores 2B-layout words */
     {   /* author the atlas mip pyramid, both bank-pair orders (atlas tile = texx 0, texy 0) */
         u32 mip[10];
         g_tex_w = 128u; g_tex_h = 64u;
         m2__font_fill_shade();
-        tex_mip_dests_banks(0u, 0u, 0x11000000u, 0x11200000u, mip);
+        tex_mip_dests_banks(0u, 0u, M2_BOARD_TEXRAM0, M2_BOARD_TEXRAM1, mip);
         tex_build_mips(mip);
         g_tex_w = 128u; g_tex_h = 64u;
         m2__font_fill_shade();
-        tex_mip_dests_banks(0u, 0u, 0x11200000u, 0x11000000u, mip);
+        tex_mip_dests_banks(0u, 0u, M2_BOARD_TEXRAM1, M2_BOARD_TEXRAM0, mip);
         tex_build_mips(mip);
     }
 #endif

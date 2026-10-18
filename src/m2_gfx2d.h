@@ -236,11 +236,11 @@ static void g2d_text_scaled(float x, float y, const char *s, u32 cb, int scale) 
 static void g2d_text(float x, float y, const char *s, u32 cb) { g2d_text_scaled(x, y, s, cb, 1); }
 
 /* ---- textured quads (de-risk spike toward crisp glyph fonts) ------------- *
- * Texels live in texram0 (0x11000000) in a 2x2-swizzled 4bpp layout; texture
+ * Texels live in texram0 (M2_BOARD_TEXRAM0; 0x11000000 on 2B) in a 2x2-swizzled 4bpp layout; texture
  * headers + per-vertex UVs live in the GEO texture_ram, written via cmd 0x04
  * (bit 0x800000). A texel is a luminance mask of the colorbase hue; value 0xf
  * (15) is TRANSPARENT. (See memory/model2-texture-format.) */
-#define G2D_TEXRAM0 ((volatile u32 *)0x11000000u)
+#define G2D_TEXRAM0 ((volatile u32 *)M2_BOARD_TEXRAM0)   /* 2A: use m2_tex_wr32 (16-bit lanes) */
 
 /* texel write is shared: m2_texram0_texel (m2font.h) */
 

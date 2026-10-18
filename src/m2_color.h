@@ -118,18 +118,39 @@ static void m2__fill_scr_colorxlat(void) {
  *    (0,1,1,2,2,..,64). Use for a data ROM that has no STF-style luma table. This is the
  *    SAFE default when the data ROM is not STF's: it can never run away on a bad count.
  *
+ *  - M2_LUMA_STF_CURVE: GENERATE STF's own polygon curve (block 0 of the table below, measured
+ *    from the sfight data ROM, to within 1). The default on 2A/2C (m2_board.h), whose data
+ *    ROMs are not STF's: text and textured quads come out in the same colours as on 2B.
+ *
  *  - otherwise (STF): essential_color_handling (STF @0x11dc8) — luma_ram = data-ROM byte
  *    ramp -> u16, length = (*M2_ROM_LUMA_BLOCKS) * 0x80. ONLY valid on STF's data ROM. */
+#if M2_BOARD_LUMA_STRIDE == 4
+typedef u32 m2_luma_t;                         /* 2A: one luma byte per 32-bit word (m2_board.h) */
+#else
+typedef u16 m2_luma_t;
+#endif
+/* luma RAM entry i = v (0..0xFF), whatever the board's bus layout */
+static void m2_luma_wr(u32 i, u32 v) { ((volatile m2_luma_t *)M2_LUMARAM)[i] = (m2_luma_t)v; }
+
 static void m2__build_lumaram(void) {
-    volatile u16 *dst = (volatile u16 *)M2_LUMARAM;
+    volatile m2_luma_t *dst = (volatile m2_luma_t *)M2_LUMARAM;
     u32 i;
-#ifdef M2_LUMA_COMPUTED
+#if defined(M2_LUMA_STF_CURVE)
+    /* every block = STF's block 0 (the lumabase g2d / m2_draw / m2_text use) to within 1:
+     * a third of the index, then half from 104 (texel 13), held at 42 from 119. The ink texel
+     * 0xE reads 38..42, the top of the 1..47 polygon ramp m2__fill_colorxlat builds; the
+     * Power Sled ramp below reaches 56 there and lands in the 2D entries (washed-out text). */
+    for (i = 0; i < 0x8000u; i++) {
+        u32 k = i & 0x7Fu, v = (k < 104u) ? k / 3u : (k - 35u) >> 1;
+        dst[i] = (m2_luma_t)(v > 42u ? 42u : v);
+    }
+#elif defined(M2_LUMA_COMPUTED)
     u32 n = (u32)(M2_LUMA_BLOCKS) * 0x80u;
-    for (i = 0; i < n; i++) dst[i] = (u16)(((i & 0x7Fu) + 1u) >> 1);
+    for (i = 0; i < n; i++) dst[i] = (m2_luma_t)(((i & 0x7Fu) + 1u) >> 1);
 #else
     volatile u8 *src = (volatile u8 *)M2_ROM_LUMA_SRC;
     u32 n = (*(volatile u32 *)M2_ROM_LUMA_BLOCKS) * 0x80u;
-    for (i = 0; i < n; i++) dst[i] = (u16)src[i];
+    for (i = 0; i < n; i++) dst[i] = (m2_luma_t)src[i];
 #endif
 }
 
