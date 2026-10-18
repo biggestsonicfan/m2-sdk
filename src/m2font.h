@@ -1067,6 +1067,18 @@ static void m2_texram_texel_at(u32 bank, int x, int y, u8 val) {
 /* set one 4-bit texel (val) at (x,y) in texram0 sheet 0 */
 static void m2_texram0_texel(int x, int y, u8 val) { m2_texram_texel_at(M2_BOARD_TEXRAM0, x, y, val); }
 
+/* Fill the w x h block at (x,y) of a texram bank with one texel value, in whole 32-bit words (4x2
+ * texels: x and w multiples of 4, y and h of 2) and no read-back. m2_texram_texel_at reads each word
+ * back first, and on 2A that read doesn't return what tex0_w/tex1_w stored in MAME, so a block
+ * built texel by texel comes out speckled there. */
+static void m2_texram_fill(u32 bank, int x, int y, int w, int h, u8 val) {
+    u32 v = (u32)(val & 0xfu) * 0x11111111u;
+    int i, j;
+    for (j = y; j < y + h; j += 2)
+        for (i = x; i < x + w; i += 4)
+            m2_tex_wr32(bank, (u32)(j / 2) * 256u + (u32)(i / 4), v);
+}
+
 static int m2__font_loaded = 0;
 
 /* Decode one atlas texel straight from gFont: glyph c's pixel, screen-order (x,y in 0..7).

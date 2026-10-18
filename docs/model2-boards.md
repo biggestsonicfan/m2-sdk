@@ -122,6 +122,17 @@ are identical. The matrix words agree to within 1.24e-6 of their column's larges
 That bound is per column because an element near 0 can come out as -0 on the TGP and
 1.3e-6 on cpres1. Against exact sines, the TGP is the closer of the two.
 
+`src/meshcube.c` draws that path: a spinning cube of six one-quad meshes in polygon RAM,
+each submitted with `m2_obj_submit_hdr()` and its own flat colorbase. In MAME it looks the
+same on `dynamcop` and `sfight`. In a one-quad mesh (mode NP_NS) the corners go lead 0,
+lead 1, then P0 next to lead 0 and P1 next to lead 1: corners `-u-v, +u-v, -u+v, +u+v`. The
+order around the edge (`-u-v, +u-v, +u+v, -u+v`) draws a bow tie.
+
+The flat-colour patch at (0, 896) is filled with `m2_texram_fill()` (`m2font.h`), which
+writes whole words and reads nothing back. On 2A in MAME a texture RAM read doesn't return
+what `tex0_w` stored, so `m2_texram_texel_at()`'s read-modify-write speckles a block built
+one texel at a time.
+
 `m2_silicon_boot()` itself sends one COP command, `m2_cop_initialize()` (command 0). It
 skips it on 2A. On 2B cpres1 needs that command before `RMATRIX` returns the matrix;
 without it the read returns zeros.

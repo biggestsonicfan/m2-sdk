@@ -55,9 +55,7 @@ static void m2_shapes_init(void) {
             m2_texram0_texel((int)(M2_CIRC_X + x), (int)(M2_CIRC_Y + y),
                            (u8)((dx * dx + dy * dy <= r2) ? 14 : 0x0f));
         }
-    for (y = 0; y < M2_SOLID_D; y++)
-        for (x = 0; x < M2_SOLID_D; x++)
-            m2_texram0_texel((int)(M2_SOLID_X + x), (int)(M2_SOLID_Y + y), 14);
+    m2_texram_fill(M2_BOARD_TEXRAM0, (int)M2_SOLID_X, (int)M2_SOLID_Y, (int)M2_SOLID_D, (int)M2_SOLID_D, 14);
     m2__shapes_loaded = 1;
 }
 

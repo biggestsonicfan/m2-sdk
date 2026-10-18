@@ -35,7 +35,7 @@ Drop your own `.c` in `src/` and reconfigure. Or use the equivalent batch script
 (`src/m2_tgp_kernel.s`: the cpres1 math and matrix commands, PUSH/POP
 and SUBMIT); 2C has no COP program yet. The `m2_obj.h` 3D path runs on 2A with your own
 object headers (`m2_obj_submit_hdr`); STF's model table is only in `sfight`. Details, the
-address map, `src/coptest.c` and `src/objtest.c`: [`docs/model2-boards.md`](docs/model2-boards.md).
+address map, `src/coptest.c`, `src/objtest.c` and `src/meshcube.c` (a spinning cube on 2A and 2B): [`docs/model2-boards.md`](docs/model2-boards.md).
 
 ### Soft-float (DEFAULT — the real i960 has no usable FPU)
 
