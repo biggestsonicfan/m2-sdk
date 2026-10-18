@@ -48,7 +48,7 @@ Supported commands. Argument order and results are the same as cpres1:
 | | |
 |---|---|
 | Scalar | `FADD` `FSUB` `FMUL` `FDIV` `INT2F` `F2INT` `SQRT` |
-| Trig (16-bit angle) | `SIN` `COS` `TAN` `SINSCALE` `COSSCALE` |
+| Trig (16-bit angle) | `SIN` `COS` `TAN` `SINSCALE` `COSSCALE` `ATAN2` |
 | Vector | `DIST2D` `DIST3D` `MAG2D` `DOT2D` `ADD3` `SUB3` `SCALE3` |
 | Matrix | `IDENTITY` `SET_POS` `SCALE` `ANG_X` `ANG_Y` `ANG_Z` `RMATRIX` |
 
@@ -74,13 +74,26 @@ cpres1 model (`src/board/sharc_exec.h`).
 
 Still missing on 2A, so `m2_obj.h` doesn't run there yet:
 
-- `ATAN2` (0x2F), sent by `m2_obj_frame_setup()`.
 - `SUBMIT` (0x78), the object submit in `m2_obj_submit()`.
 - The matrix stack (`PUSH`/`POP`), `WMATRIX` and the bone commands.
 
 `m2_silicon_boot()` itself sends one COP command, `m2_cop_initialize()` (command 0). It
 skips it on 2A. On 2B cpres1 needs that command before `RMATRIX` returns the matrix;
 without it the read returns zeros.
+
+### ATAN2
+
+`ATAN2 x1 x2 z1 z2` (`m2_cop_atan2`, sent by `m2_obj_frame_setup()`) returns the angle of
+atan2(z2 - z1, x2 - x1) as `floor(rad * 32768/pi) & 0xffff`. The kernel runs cpres1's
+algorithm with cpres1's constants (m2-hle2 `src/board/sharc.h`, `sharc_fw_atan2`): t is
+min/max of |x| and |y|, reduced by 30° above tan 15°, then a rational polynomial, then the
+octant and quadrant. (0, 0) gives 0. cpres1's pi/2 and pi scale to just under 0x4000 and
+0x8000, so the +z axis is 0x3fff and the -x axis 0x7fff, on both boards.
+
+The TGP has an atan table (io 0x24-0x27, model2.cpp `copro_atan_r`), but it is only good to
+about one unit, so the kernel doesn't use it. Each divide gets one correction from its
+residual, so the float angle stays very close to cpres1's, but not bit-exact: the word can
+differ by one when the angle falls right at a unit boundary.
 
 Divide and square root use the TGP's seed tables (io 0x28/0x29 and 0x2a/0x2b) with one
 correction step, as Dynamite Cop's program does. They match the i960's result to within
@@ -122,8 +135,11 @@ the result bits in red. Every line also goes to the UART on the first pass. In M
 - `sfight` (2B, STF cpres1; needs `src/cpres1.h`): ALL COMMANDS OK
 - `dynamcopc` (2C): "Model 2C: no COP program yet"
 
-The last twelve lines (`m.c0x` .. `m.tz`) send IDENTITY, SET_POS, ANG_Y, ANG_X, ANG_Z,
+The twelve `m.` lines (`m.c0x` .. `m.tz`) send IDENTITY, SET_POS, ANG_Y, ANG_X, ANG_Z,
 SCALE and SET_POS, then read the matrix back. On `dynamcop` the result is bit-exact to
 the i960 model of the formulas above. On `sfight` cpres1 differs from it by a few ULPs,
 and from 2A by at most 1.7e-6 relative. Most of that comes from the sine tables: cpres1's
 sin 45° is 0x3F3504F7, the TGP's 0x3F3504F3.
+
+The last eight lines are `ATAN2` on all four quadrants, both axes and (0, 0). Their expected
+words come from the cpres1 model, and `dynamcop` and `sfight` return the same eight words.

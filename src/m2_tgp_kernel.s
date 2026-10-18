@@ -10,7 +10,8 @@
 ; Semantics follow STF's cpres1 as recorded in m2-hle (src/board/sharc_exec.h, checked
 ; against MAME): same argument order, same results. That covers the math commands and the
 ; matrix ones m2_obj_submit sends (IDENTITY, SET_POS, ANG_X/Y/Z, SCALE) plus RMATRIX to read
-; the matrix back. There is one matrix (no PUSH/POP stack), and no ATAN2 or SUBMIT yet.
+; the matrix back, and ATAN2 (the azimuth m2_obj_frame_setup asks for). There is one matrix
+; (no PUSH/POP stack), and no SUBMIT yet.
 ; Commands not listed in the table are ignored (their arguments would then be read as
 ; commands: don't send them on 2A).
 ;
@@ -26,6 +27,19 @@
 .equ SN, 0x72           ; sin / cos of the angle a rotation command is working with
 .equ CS, 0x73
 .equ R0, 0x74
+.equ DN, 0x72           ; divp's denominator, numerator and first quotient (SN/CS/R0 are free then)
+.equ NM, 0x73
+.equ Q,  0x74
+.equ XV, 0x75           ; atan2: x, y, |x|, |y|, swapped flag, t, octant bases, t*t, numerator
+.equ YV, 0x76
+.equ AX, 0x77
+.equ AY, 0x78
+.equ SW, 0x79
+.equ TT, 0x7a
+.equ BS, 0x7b
+.equ BW, 0x7c
+.equ G,  0x7d
+.equ NU, 0x7e
 
 ; The current matrix, laid out as cpres1 keeps its bone slot (m2-hle sharc_exec.h, Fn_get_matrix):
 ; three rotation columns, then the translation T. A point p maps to col0*p.x + col1*p.y + col2*p.z + T.
@@ -565,6 +579,172 @@ sqrtd:  mov d, $T0
         fml
         rtif alw
 
+; ---- atan2 ---------------------------------------------------------------------------------
+; cpres1's algorithm (m2-hle2 sharc.h sharc_fw_atan2, Fn_get_2d_dir): t = min/max of |x|,|y|,
+; reduced by 30 degrees above tan 15, a rational polynomial, then the octant and quadrant. The
+; angle is floor(rad * 32768/pi) & 0xffff. The TGP's own atan table (io 0x24-0x27) is only good
+; to about one unit, so this uses the float path; divides get one residual correction (divp).
+; The constants are cpres1's.
+
+atan2:  mov rf1, a              ; 0x2f (x1, x2, z1, z2) -> atan2(z2 - z1, x2 - x1) as a 16-bit angle
+        mov rf1, d
+        fsbd
+        mov d, $XV              ; x = x2 - x1
+        fabd
+        mov d, $AX
+        mov rf1, a
+        mov rf1, d
+        fsbd
+        mov d, $YV              ; y = z2 - z1
+        fabd
+        mov d, $AY
+        mov $AX, a
+        fadd                    ; |x| + |y|
+        brif zrd #atzero        ; (0, 0) -> 0, as cpres1
+        mov $AY, d
+        fcpd                    ; |y| - |x| (a = |x|)
+        brif !led #atswp
+        mov d, $T0              ; |y| <= |x|: t = |y| / |x|
+        ldi #0, d
+        brif alw #atdiv
+atswp:  mov $AX, d              ; |y| > |x|: t = |x| / |y|, the angle is pi/2 - atan(t)
+        mov d, $T0
+        mov $AY, a
+        ldi #1, d
+atdiv:  mov d, $SW
+        bsif alw #divp
+        mov d, $TT
+        ldi #0, d
+        mov d, $BS              ; octant base: 0 (pi/6 once t is reduced)
+        ldi #0x490fda, al       ; a = HALFPI (0x3FC90FDA)
+        ldi #0x7f, ah
+        mov a, $BW              ; the same when swapped: pi/2 (pi/3 once t is reduced)
+        mov $TT, d
+        ldi #0x0930a2, al       ; a = TAN15 (0x3E8930A2)
+        ldi #0x7d, ah
+        fcpd
+        brif !ged #atpoly       ; t < tan 15: no reduction
+        ldi #0x5db3d7, al       ; a = SQRT3 (0x3FDDB3D7)
+        ldi #0x7f, ah
+        mov $TT, b
+        fml                     ; sqrt3 * t
+        ldi #1, d
+        cxfd
+        mov d, a
+        mov p, d
+        fsbd
+        mov d, $T0              ; sqrt3*t - 1
+        ldi #0x5db3d7, al       ; a = SQRT3 (0x3FDDB3D7)
+        ldi #0x7f, ah
+        mov $TT, d
+        fadd                    ; sqrt3 + t
+        mov d, a
+        bsif alw #divp
+        mov d, $TT              ; t = (sqrt3*t - 1) / (sqrt3 + t)
+        ldi #0x060a91, al       ; a = PI6 (0x3F060A91)
+        ldi #0x7e, ah
+        mov a, $BS
+        ldi #0x060a91, al       ; a = PI3 (0x3F860A91)
+        ldi #0x7f, ah
+        mov a, $BW
+atpoly: mov $TT, a              ; atan(t) = t + t * g*(P0*g + P1) / ((g + Q0)*g + Q1), g = t*t
+        mov a, b
+        fml
+        mov p, $G
+        ldi #0xb853ad, al       ; a = P0 (0xBF3853AD)
+        ldi #0x7e, ah
+        mov $G, b
+        fml                     ; P0 * g
+        mov p, d
+        ldi #0xb854a7, al       ; a = P1 (0xBFB854A7)
+        ldi #0x7f, ah
+        fadd                    ; P0*g + P1
+        mov d, a
+        fml                     ; (P0*g + P1) * g
+        mov p, $NU
+        ldi #0x18123b, al       ; a = Q0 (0x4098123B)
+        ldi #0x81, ah
+        mov $G, d
+        fadd                    ; g + Q0
+        mov d, a
+        fml                     ; (g + Q0) * g
+        mov p, d
+        ldi #0x0a3f7d, al       ; a = Q1 (0x408A3F7D)
+        ldi #0x81, ah
+        fadd                    ; + Q1
+        mov d, a
+        mov $NU, d
+        mov d, $T0
+        bsif alw #divp
+        mov d, a
+        mov $TT, b
+        fml
+        mov $TT, d
+        fsmd                    ; atan(t)
+        mov d, $TT
+        mov $SW, d
+        ldi #0, a
+        orad
+        brif zrd #atns
+        mov $TT, a
+        mov $BW, d
+        fsbd                    ; swapped: base - atan(t)
+        brif alw #atq
+atns:   mov $TT, a
+        mov $BS, d
+        fadd                    ; base + atan(t)
+atq:    mov d, $TT
+        mov $XV, d
+        ldi #0, a
+        fcpd
+        brif ged #atpos
+        ldi #0x490fda, al       ; a = PI (0x40490FDA)
+        ldi #0x80, ah
+        mov a, d
+        mov $TT, a
+        fsbd                    ; x < 0: pi - angle
+        mov d, $TT
+atpos:  mov $YV, d
+        ldi #0, a
+        fcpd
+        brif ged #atout
+        mov $TT, d
+        fned                    ; y < 0: -angle
+        mov d, $TT
+atout:  mov $TT, a
+        ldi #0x22f983, bl       ; b = ANGK (0x4622F983)
+        ldi #0x8c, bh
+        fml                     ; radians * 32768/pi
+        mov p, d
+        stmh fp rm              ; floor, as cpres1's fix under TRUNCATE
+        cfxd
+        stmh fp rz
+        ldi #0xffff, a
+        andd
+        mov d, rf2
+        brif alw #loop
+atzero: ldi #0, d
+        mov d, rf2
+        brif alw #loop
+
+; d = $T0 / a to nearly full float precision: div, then one correction with the residual.
+divp:   mov a, $DN
+        mov $T0, d
+        mov d, $NM
+        bsif alw #div           ; q0
+        mov p, $Q
+        mov $DN, a
+        mov p, b
+        fml                     ; den * q0
+        mov $NM, d
+        fmrd                    ; residual = num - den*q0
+        mov d, $T0
+        mov $DN, a
+        bsif alw #div           ; residual / den
+        mov $Q, d
+        fsmd
+        rtif alw
+
 ; ---- dispatch: one entry per command number 0x00..0xff ----------------------------------------
 .equ NONE, loop
 table:
@@ -615,7 +795,7 @@ table:
         brif alw #dist3d        ; 2c DIST3D
         brif alw #mag2d         ; 2d MAG2D
         brif alw #NONE          ; 2e
-        brif alw #NONE          ; 2f
+        brif alw #atan2         ; 2f ATAN2
         brif alw #NONE          ; 30
         brif alw #NONE          ; 31
         brif alw #NONE          ; 32

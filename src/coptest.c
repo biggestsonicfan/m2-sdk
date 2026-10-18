@@ -4,8 +4,9 @@
  * Boots the board's coprocessor (m2_cop_boot: STF's cpres1 SHARC on 2B, the SDK's TGP
  * program src/m2_tgp_kernel.s on 2A), sends each scalar / trig / vector command through the
  * COP FIFO and compares the result with the i960's own float math. One line per command on
- * screen (OK or BAD, result bits, expected bits) and a total at the bottom. The last twelve
- * lines are the current matrix after the transform commands m2_obj_submit sends (RMATRIX).
+ * screen (OK or BAD, result bits, expected bits) and a total at the bottom. Then twelve lines
+ * for the current matrix after the transform commands m2_obj_submit sends (RMATRIX), and
+ * eight ATAN2 angles.
  *
  *   cmake ... -DM2_GAME=coptest -DM2_BOARD=2A     run on dynamcop
  *   cmake ... -DM2_GAME=coptest                   run on sfight (2B, needs cpres1.h)
@@ -18,7 +19,8 @@
 #include "m2_gfx2d.h"
 #include "m2_3d.h"
 
-#define NTEST 48
+#define NTEST 64
+#define NROW 18     /* lines per column on screen */
 volatile u32 g_cop_result[NTEST];
 volatile u32 g_cop_bad;
 volatile u32 g_cop_done;
@@ -76,7 +78,7 @@ static void check(const char *name, float got, float want) {
      * glyphs, spaces included, so an OK line stops at the name); the UART gets every line in full,
      * expected bits too. */
     if (ok) line[n] = 0; else line[22] = 0;
-    g2d_ttext(16 + (n_line / 16) * 160, 24 + (n_line % 16) * 10, line, ok ? 2 : 3);
+    g2d_ttext(16 + (n_line / NROW) * 160, 24 + (n_line % NROW) * 10, line, ok ? 2 : 3);
     n_line++;
     if (!g_cop_done) {
         line[n] = ' '; line[12] = ok ? ' ' : 'D'; line[22] = ' ';
@@ -149,6 +151,17 @@ static void run_tests(void) {
         m2_cop_rmatrix(got);
         for (i = 0; i < 12; i++) check(nm[i], got[i], g_m[i]);
     }
+    /* ATAN2 (x1, x2, z1, z2) -> floor(atan2(z2 - z1, x2 - x1) * 32768/pi) & 0xffff. The expected
+     * words are cpres1's (m2-hle2 sharc.h sharc_fw_atan2): its pi/2 and pi constants scale to
+     * just under 0x4000 / 0x8000, so the axes come back as 0x3fff / 0x7fff. */
+    checki("atan++",  (int)m2_cop_atan2(1.0f, 5.0f, -1.0f, 2.0f),    0x1a37);   /* ( 4,  3)     */
+    checki("atan-+",  (int)m2_cop_atan2(3.0f, -2.0f, 0.5f, 2.5f),    0x707f);   /* (-5,  2)     */
+    checki("atan--",  (int)m2_cop_atan2(2.0f, 0.5f, 4.0f, -2.0f),    0xb604);   /* (-1.5, -6)   */
+    checki("atan+-",  (int)m2_cop_atan2(-1.0f, 6.0f, 1.0f, 0.75f),   0xfe8b);   /* ( 7, -0.25)  */
+    checki("atan90",  (int)m2_cop_atan2(-3.0f, -3.0f, 1.0f, 3.0f),   0x3fff);   /* ( 0,  2)     */
+    checki("atan180", (int)m2_cop_atan2(4.0f, 1.0f, -2.0f, -2.0f),   0x7fff);   /* (-3,  0)     */
+    checki("atan0",   (int)m2_cop_atan2(-2.0f, 3.0f, 0.0f, 0.0f),    0);        /* ( 5,  0)     */
+    checki("atan00",  (int)m2_cop_atan2(2.5f, 2.5f, 1.0f, 1.0f),     0);        /* ( 0,  0)     */
 }
 
 int main(void) {
@@ -174,7 +187,7 @@ int main(void) {
         g2d_begin();
         g2d_ttext(16, 8, M2_BOARD_NAME " COP test", 1);
         run_tests();
-        g2d_ttext(16, 24 + 16 * 10 + 6, g_cop_bad ? "SOME COMMANDS FAILED" : "ALL COMMANDS OK", g_cop_bad ? 3 : 2);
+        g2d_ttext(16, 24 + NROW * 10 + 6, g_cop_bad ? "SOME COMMANDS FAILED" : "ALL COMMANDS OK", g_cop_bad ? 3 : 2);
         g_cop_done++;
         g2d_end();
         m2_vsync();
