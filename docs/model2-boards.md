@@ -100,9 +100,27 @@ The TGP reaches buffer RAM through its bank register: writing 0x400000 to `rf3` 
 0x0000-0x7fff to buffer RAM (model2.cpp `copro_tgp_memory_w`). That hides the sin/cos and
 divide tables, so `SUBMIT` writes 0 to `rf3` when it is done.
 
-The matrix, object and model addresses are the same on 2A, but the model table
-`m2_obj.h` uses (`M2_MODEL_TABLE`, model 456) is in STF's data ROM. On `dynamcop` that
-address holds Dynamite Cop's data, so the 3D path needs your own models there.
+### The 3D path on 2A
+
+`m2_silicon_boot()`, `m2_frame_begin()`, `m2_obj_frame_setup()`, the submit and
+`m2_frame_commit()` run unchanged on 2A: the COP write cursor (0x802008) and the GEO
+registers are at the same addresses, and every COP command they send is in the kernel.
+The one 2B-only piece is the model table. `m2_obj_submit()` reads its header from
+`M2_MODEL_TABLE` (model 456 for `m2_solid_quad()`), which is in STF's data ROM. On
+`dynamcop` that address holds Dynamite Cop's data. Use `m2_obj_submit_hdr()` instead: it
+takes the 4-word header `{tpa, tha, oba, obc}` from wherever you keep it, for example for
+a mesh you put in polygon RAM with `GEO_OP_POLYDATA`. `m2_load_poly_palette()` also copies
+from STF's data ROM, so set your colours with `m2_3d_solid()` or `m2_setcolor()` on 2A.
+
+`src/objtest.c` checks this path. It boots with `m2_silicon_boot()`, then submits two
+objects that use a two-quad mesh in polygon RAM. After each submit it reads the 19 words
+in buffer RAM (`SUBMIT`'s 18 and the END mark after them) and the returned counts, and
+compares them with the header and with the matrix `RMATRIX` returns after the same
+commands. `dynamcop` and `sfight` both show ALL SUBMITS OK. Comparing the two boards'
+`g_obj_words` / `g_obj_counts` with `tools/objtest_cmp.py`, the integer words and counts
+are identical. The matrix words agree to within 1.24e-6 of their column's largest element.
+That bound is per column because an element near 0 can come out as -0 on the TGP and
+1.3e-6 on cpres1. Against exact sines, the TGP is the closer of the two.
 
 `m2_silicon_boot()` itself sends one COP command, `m2_cop_initialize()` (command 0). It
 skips it on 2A. On 2B cpres1 needs that command before `RMATRIX` returns the matrix;
