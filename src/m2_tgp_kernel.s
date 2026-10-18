@@ -8,8 +8,11 @@
 ; both ways of sending a command work.
 ;
 ; Semantics follow STF's cpres1 as recorded in m2-hle (src/board/sharc_exec.h, checked
-; against MAME): same argument order, same results. Commands not listed in the table are
-; ignored (their arguments would then be read as commands: don't send them on 2A).
+; against MAME): same argument order, same results. That covers the math commands and the
+; matrix ones m2_obj_submit sends (IDENTITY, SET_POS, ANG_X/Y/Z, SCALE) plus RMATRIX to read
+; the matrix back. There is one matrix (no PUSH/POP stack), and no ATAN2 or SUBMIT yet.
+; Commands not listed in the table are ignored (their arguments would then be read as
+; commands: don't send them on 2A).
 ;
 ; Hardware used (MAME src/mame/sega/model2.cpp, copro_tgp_*): rf1 = input FIFO (a read
 ; waits for data), rf2 = output FIFO, io 0x20/0x21 = sin/cos of a 16-bit angle, io
@@ -20,6 +23,24 @@
 
 .equ T0, 0x70           ; scratch data RAM
 .equ T1, 0x71
+.equ SN, 0x72           ; sin / cos of the angle a rotation command is working with
+.equ CS, 0x73
+.equ R0, 0x74
+
+; The current matrix, laid out as cpres1 keeps its bone slot (m2-hle sharc_exec.h, Fn_get_matrix):
+; three rotation columns, then the translation T. A point p maps to col0*p.x + col1*p.y + col2*p.z + T.
+.equ C0X, 0x60
+.equ C0Y, 0x61
+.equ C0Z, 0x62
+.equ C1X, 0x63
+.equ C1Y, 0x64
+.equ C1Z, 0x65
+.equ C2X, 0x66
+.equ C2Y, 0x67
+.equ C2Z, 0x68
+.equ TX,  0x69
+.equ TY,  0x6a
+.equ TZ,  0x6b
 
         brif alw #start         ; 0: reset
         brif alw #irq           ; 1-5: interrupt vectors (model2.cpp raises none)
@@ -32,6 +53,7 @@ irq:    iret
 start:  set #0x0800             ; same start-up state as Dynamite Cop's program
         ldi #0x2, mask
         stmh fp rz              ; float mode, round toward zero (as Dynamite Cop runs)
+        brif alw #ident         ; start with the identity matrix
 
 loop:   mov rf1, b              ; command word
         mov bh, d               ; bits 30:23 = command number
@@ -194,6 +216,319 @@ scale3: mov rf1, b              ; 0x5e (s, x, y, z) -> (s*x, s*y, s*z)
         mov p, rf2
         brif alw #loop
 
+; ---- the current matrix (what m2_obj_submit sends before polygon_submit) ----------------------
+; Same results as cpres1 (m2-hle sharc_exec.h / sharc.h, checked against MAME): each angle
+; command post-multiplies the rotation, so a rotation changes two columns; SET_POS adds one
+; column at a time, in the order cpres1 rounds it.
+
+ident:  ldi #1, d               ; 0x03 rot = I, T = 0
+        cxfd
+        mov d, $C0X
+        mov d, $C1Y
+        mov d, $C2Z
+        ldi #0, d
+        mov d, $C0Y
+        mov d, $C0Z
+        mov d, $C1X
+        mov d, $C1Z
+        mov d, $C2X
+        mov d, $C2Y
+        mov d, $TX
+        mov d, $TY
+        mov d, $TZ
+        brif alw #loop
+
+setpos: mov rf1, b              ; 0x06 (x, y, z): T += x*col0, then y*col1, then z*col2
+        mov $C0X, a
+        fml
+        mov $TX, d
+        fsmd
+        mov d, $TX
+        mov $C0Y, a
+        fml
+        mov $TY, d
+        fsmd
+        mov d, $TY
+        mov $C0Z, a
+        fml
+        mov $TZ, d
+        fsmd
+        mov d, $TZ
+        mov rf1, b
+        mov $C1X, a
+        fml
+        mov $TX, d
+        fsmd
+        mov d, $TX
+        mov $C1Y, a
+        fml
+        mov $TY, d
+        fsmd
+        mov d, $TY
+        mov $C1Z, a
+        fml
+        mov $TZ, d
+        fsmd
+        mov d, $TZ
+        mov rf1, b
+        mov $C2X, a
+        fml
+        mov $TX, d
+        fsmd
+        mov d, $TX
+        mov $C2Y, a
+        fml
+        mov $TY, d
+        fsmd
+        mov d, $TY
+        mov $C2Z, a
+        fml
+        mov $TZ, d
+        fsmd
+        mov d, $TZ
+        brif alw #loop
+
+scale:  mov rf1, b              ; 0x07 (sx, sy, sz): col k *= s_k
+        mov $C0X, a
+        fml
+        mov p, $C0X
+        mov $C0Y, a
+        fml
+        mov p, $C0Y
+        mov $C0Z, a
+        fml
+        mov p, $C0Z
+        mov rf1, b
+        mov $C1X, a
+        fml
+        mov p, $C1X
+        mov $C1Y, a
+        fml
+        mov p, $C1Y
+        mov $C1Z, a
+        fml
+        mov p, $C1Z
+        mov rf1, b
+        mov $C2X, a
+        fml
+        mov p, $C2X
+        mov $C2Y, a
+        fml
+        mov p, $C2Y
+        mov $C2Z, a
+        fml
+        mov p, $C2Z
+        brif alw #loop
+
+angx:   mov rf1, $0x20 (e)      ; 0x08 (ang): rot = rot * Rx; col2' = c*col2 + s*col1, col1' = c*col1 - s*col2
+        mov $0x20 (e), $SN
+        mov $0x21 (e), $CS
+        mov $C2X, a             ; row 0: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C1X, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C1X, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C2X, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C1X
+        mov $R0, d
+        mov d, $C2X
+        mov $C2Y, a             ; row 1: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C1Y, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C1Y, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C2Y, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C1Y
+        mov $R0, d
+        mov d, $C2Y
+        mov $C2Z, a             ; row 2: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C1Z, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C1Z, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C2Z, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C1Z
+        mov $R0, d
+        mov d, $C2Z
+        brif alw #loop
+
+angy:   mov rf1, $0x20 (e)      ; 0x09 (ang): rot = rot * Ry; col0' = c*col0 + s*col2, col2' = c*col2 - s*col0
+        mov $0x20 (e), $SN
+        mov $0x21 (e), $CS
+        mov $C0X, a             ; row 0: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C2X, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C2X, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C0X, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C2X
+        mov $R0, d
+        mov d, $C0X
+        mov $C0Y, a             ; row 1: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C2Y, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C2Y, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C0Y, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C2Y
+        mov $R0, d
+        mov d, $C0Y
+        mov $C0Z, a             ; row 2: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C2Z, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C2Z, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C0Z, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C2Z
+        mov $R0, d
+        mov d, $C0Z
+        brif alw #loop
+
+angz:   mov rf1, $0x20 (e)      ; 0x0a (ang): rot = rot * Rz; col1' = c*col1 + s*col0, col0' = c*col0 - s*col1
+        mov $0x20 (e), $SN
+        mov $0x21 (e), $CS
+        mov $C1X, a             ; row 0: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C0X, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C0X, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C1X, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C0X
+        mov $R0, d
+        mov d, $C1X
+        mov $C1Y, a             ; row 1: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C0Y, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C0Y, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C1Y, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C0Y
+        mov $R0, d
+        mov d, $C1Y
+        mov $C1Z, a             ; row 2: u' = c*u + s*v
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C0Z, a
+        mov $SN, b
+        fml
+        fsmd
+        mov d, $R0
+        mov $C0Z, a             ; v' = c*v - s*u
+        mov $CS, b
+        fml
+        mov p, d
+        mov $C1Z, a
+        mov $SN, b
+        fml
+        fmrd
+        mov d, $C0Z
+        mov $R0, d
+        mov d, $C1Z
+        brif alw #loop
+
+rmat:   mov $C0X, rf2           ; 0x05 -> col0, col1, col2, T (the slot as cpres1 holds it)
+        mov $C0Y, rf2
+        mov $C0Z, rf2
+        mov $C1X, rf2
+        mov $C1Y, rf2
+        mov $C1Z, rf2
+        mov $C2X, rf2
+        mov $C2Y, rf2
+        mov $C2Z, rf2
+        mov $TX, rf2
+        mov $TY, rf2
+        mov $TZ, rf2
+        brif alw #loop
+
 ; ---- subroutines ----------------------------------------------------------------------------
 
 ; p = (next - next)^2 from two FIFO words.
@@ -236,14 +571,14 @@ table:
         brif alw #NONE          ; 00
         brif alw #NONE          ; 01
         brif alw #NONE          ; 02
-        brif alw #NONE          ; 03
+        brif alw #ident         ; 03 IDENTITY
         brif alw #NONE          ; 04
-        brif alw #NONE          ; 05
-        brif alw #NONE          ; 06
-        brif alw #NONE          ; 07
-        brif alw #NONE          ; 08
-        brif alw #NONE          ; 09
-        brif alw #NONE          ; 0a
+        brif alw #rmat          ; 05 RMATRIX
+        brif alw #setpos        ; 06 SET_POS
+        brif alw #scale         ; 07 SCALE
+        brif alw #angx          ; 08 ANG_X
+        brif alw #angy          ; 09 ANG_Y
+        brif alw #angz          ; 0a ANG_Z
         brif alw #NONE          ; 0b
         brif alw #NONE          ; 0c
         brif alw #NONE          ; 0d

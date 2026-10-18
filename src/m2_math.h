@@ -156,7 +156,8 @@ static void m2_cop_rot2d(u32 ang, float x, float y, float out[2]) {  /* (x*cos -
     out[0] = m2_cop_gf(); out[1] = m2_cop_gf();
 }
 
-/* Load/read a 3x4 matrix (row-major: 3 rows of [r0 r1 r2 t]) to/from a COP bone slot. */
+/* Load/read the COP's current 3x4 matrix: column 0, column 1, column 2 (x,y,z each), then the
+ * translation x,y,z (cpres1 layout; coptest checks the RMATRIX order on sfight). */
 static void m2_cop_wmatrix(const float m[12]) {
     int i; m2_cop(COP_WMATRIX); for (i = 0; i < 12; i++) m2_cop_pf(m[i]);
 }

@@ -4,7 +4,8 @@
  * Boots the board's coprocessor (m2_cop_boot: STF's cpres1 SHARC on 2B, the SDK's TGP
  * program src/m2_tgp_kernel.s on 2A), sends each scalar / trig / vector command through the
  * COP FIFO and compares the result with the i960's own float math. One line per command on
- * screen (OK or BAD, result bits, expected bits) and a total at the bottom.
+ * screen (OK or BAD, result bits, expected bits) and a total at the bottom. The last twelve
+ * lines are the current matrix after the transform commands m2_obj_submit sends (RMATRIX).
  *
  *   cmake ... -DM2_GAME=coptest -DM2_BOARD=2A     run on dynamcop
  *   cmake ... -DM2_GAME=coptest                   run on sfight (2B, needs cpres1.h)
@@ -17,7 +18,7 @@
 #include "m2_gfx2d.h"
 #include "m2_3d.h"
 
-#define NTEST 32
+#define NTEST 48
 volatile u32 g_cop_result[NTEST];
 volatile u32 g_cop_bad;
 volatile u32 g_cop_done;
@@ -27,6 +28,26 @@ static u32 fbits(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }
 static float dist2d(float x1, float x2, float z1, float z2) {   /* COP_DIST2D, (x1,x2,z1,z2) */
     m2_cop(COP_DIST2D); m2_cop_pf(x1); m2_cop_pf(x2); m2_cop_pf(z1); m2_cop_pf(z2);
     return m2_cop_gf();
+}
+
+/* The matrix commands m2_obj_submit sends, then RMATRIX. The expected matrix is worked out here
+ * the way cpres1 does it (m2-hle sharc_exec.h): one slot of three rotation columns + T, each angle
+ * post-multiplies, SET_POS adds col0*x, then col1*y, then col2*z. sin/cos come from the COP itself
+ * (checked above), so this checks the matrix arithmetic. */
+static float g_m[12];   /* col0, col1, col2, T */
+static void m_rot(int u, int v, float s, float c) {   /* col u' = c*u + s*v, col v' = c*v - s*u */
+    int r;
+    for (r = 0; r < 3; r++) {
+        float a = g_m[u * 3 + r], b = g_m[v * 3 + r];
+        g_m[u * 3 + r] = c * a + s * b;
+        g_m[v * 3 + r] = c * b - s * a;
+    }
+}
+static void m_setpos(float x, float y, float z) {
+    int w;
+    for (w = 0; w < 3; w++) g_m[9 + w] = g_m[9 + w] + x * g_m[w];
+    for (w = 0; w < 3; w++) g_m[9 + w] = g_m[9 + w] + y * g_m[3 + w];
+    for (w = 0; w < 3; w++) g_m[9 + w] = g_m[9 + w] + z * g_m[6 + w];
 }
 
 static int n_line;
@@ -40,24 +61,25 @@ static void hex8(char *p, u32 v) {
 static void check(const char *name, float got, float want) {
     float err = got - want, mag = want < 0 ? -want : want;
     char line[40];
-    int i, ok;
+    int i, n, ok;
     if (err < 0) err = -err;
     ok = err <= (mag > 1.0f ? mag : 1.0f) * 1e-5f;
     for (i = 0; i < 39; i++) line[i] = ' ';
     line[39] = 0;
-    for (i = 0; name[i] && i < 9; i++) line[i] = name[i];
+    for (n = 0; name[n] && n < 9; n++) line[n] = name[n];
     line[10] = ok ? 'O' : 'B'; line[11] = ok ? 'K' : 'A'; line[12] = 'D';
     hex8(line + 14, fbits(got));
     hex8(line + 23, fbits(want));
     if (n_line < NTEST) g_cop_result[n_line] = fbits(got);
     if (!ok) g_cop_bad++;
     /* on screen: the name in green, or "name BAD result-bits" in red (a frame's display list holds ~390
-     * glyphs); the UART gets every line in full, expected bits too. */
-    if (ok) line[9] = 0; else line[22] = 0;
-    g2d_ttext(16 + (n_line / 16) * 240, 24 + (n_line % 16) * 10, line, ok ? 2 : 3);
+     * glyphs, spaces included, so an OK line stops at the name); the UART gets every line in full,
+     * expected bits too. */
+    if (ok) line[n] = 0; else line[22] = 0;
+    g2d_ttext(16 + (n_line / 16) * 160, 24 + (n_line % 16) * 10, line, ok ? 2 : 3);
     n_line++;
     if (!g_cop_done) {
-        line[9] = ' '; line[12] = ok ? ' ' : 'D'; line[22] = ' ';
+        line[n] = ' '; line[12] = ok ? ' ' : 'D'; line[22] = ' ';
         m2_uart_puts(line); m2_uart_puts("\r\n");
     }
 }
@@ -102,6 +124,31 @@ static void run_tests(void) {
         m2_cop_scale3(-2.0f, a, o);
         check("scale3.x", o[0], -2.0f); check("scale3.z", o[2], -6.0f);
     }
+    {
+        static const char *nm[12] = { "m.c0x", "m.c0y", "m.c0z", "m.c1x", "m.c1y", "m.c1z",
+                                      "m.c2x", "m.c2y", "m.c2z", "m.tx", "m.ty", "m.tz" };
+        float sy, cy, sx, cx, sz, cz, got[12];
+        int i;
+        cop_sincos(0x2000, &sy, &cy);   /* 45 */
+        cop_sincos(0x1555, &sx, &cx);   /* 30 */
+        cop_sincos(0xC000, &sz, &cz);   /* 270 */
+        for (i = 0; i < 12; i++) g_m[i] = (i == 0 || i == 4 || i == 8) ? 1.0f : 0.0f;
+        m_setpos(1.5f, -2.0f, 3.0f);
+        m_rot(0, 2, sy, cy);            /* ANG_Y */
+        m_rot(2, 1, sx, cx);            /* ANG_X */
+        m_rot(1, 0, sz, cz);            /* ANG_Z */
+        for (i = 0; i < 9; i++) g_m[i] *= (i < 3 ? 2.0f : i < 6 ? 0.5f : -3.0f);   /* SCALE */
+        m_setpos(10.0f, 20.0f, 30.0f);
+        m2_cop(COP_IDENTITY);
+        m2_cop(COP_SET_POS); m2_cop_pf(1.5f); m2_cop_pf(-2.0f); m2_cop_pf(3.0f);
+        m2_cop(COP_ANG_Y); m2_cop_pi(0x2000);
+        m2_cop(COP_ANG_X); m2_cop_pi(0x1555);
+        m2_cop(COP_ANG_Z); m2_cop_pi(0xC000);
+        m2_cop(COP_SCALE); m2_cop_pf(2.0f); m2_cop_pf(0.5f); m2_cop_pf(-3.0f);
+        m2_cop(COP_SET_POS); m2_cop_pf(10.0f); m2_cop_pf(20.0f); m2_cop_pf(30.0f);
+        m2_cop_rmatrix(got);
+        for (i = 0; i < 12; i++) check(nm[i], got[i], g_m[i]);
+    }
 }
 
 int main(void) {
@@ -122,6 +169,7 @@ int main(void) {
     }
 #else
     m2_cop_boot();
+    m2_cop_initialize();   /* cpres1 command 0: matrix stack empty, current slot at its base */
     for (;;) {
         g2d_begin();
         g2d_ttext(16, 8, M2_BOARD_NAME " COP test", 1);

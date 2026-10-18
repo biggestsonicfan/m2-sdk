@@ -50,11 +50,37 @@ Supported commands. Argument order and results are the same as cpres1:
 | Scalar | `FADD` `FSUB` `FMUL` `FDIV` `INT2F` `F2INT` `SQRT` |
 | Trig (16-bit angle) | `SIN` `COS` `TAN` `SINSCALE` `COSSCALE` |
 | Vector | `DIST2D` `DIST3D` `MAG2D` `DOT2D` `ADD3` `SUB3` `SCALE3` |
+| Matrix | `IDENTITY` `SET_POS` `SCALE` `ANG_X` `ANG_Y` `ANG_Z` `RMATRIX` |
 
 Any other command is ignored. Its arguments are then read as commands, so don't send
-one on 2A. The matrix, bone, `ATAN2` and object-submit commands are not there yet, so
-`m2_obj.h` / `m2_silicon_boot()` don't work on 2A. `m2_fastmath.h` (the default) does the
-scalar math on the i960 and works on every board.
+one on 2A. `m2_fastmath.h` (the default) does the scalar math on the i960 and works on
+every board.
+
+### The matrix commands
+
+The kernel keeps one matrix, laid out as cpres1's: three columns, then the translation.
+`RMATRIX` returns col0, col1, col2, T (12 floats). The commands are the transform ones
+`m2_obj_submit()` sends:
+
+- `IDENTITY`: rotation = I, T = 0.
+- `SET_POS x y z`: T += x*col0 + y*col1 + z*col2.
+- `SCALE sx sy sz`: col0 *= sx, col1 *= sy, col2 *= sz.
+- `ANG_X a`: col1' = c*col1 - s*col2, col2' = s*col1 + c*col2.
+- `ANG_Y a`: col0' = c*col0 + s*col2, col2' = c*col2 - s*col0.
+- `ANG_Z a`: col0' = c*col0 - s*col1, col1' = s*col0 + c*col1.
+
+Here s and c are the sine and cosine of the 16-bit angle `a`. The formulas are m2-hle2's
+cpres1 model (`src/board/sharc_exec.h`).
+
+Still missing on 2A, so `m2_obj.h` doesn't run there yet:
+
+- `ATAN2` (0x2F), sent by `m2_obj_frame_setup()`.
+- `SUBMIT` (0x78), the object submit in `m2_obj_submit()`.
+- The matrix stack (`PUSH`/`POP`), `WMATRIX` and the bone commands.
+
+`m2_silicon_boot()` itself sends one COP command, `m2_cop_initialize()` (command 0). It
+skips it on 2A. On 2B cpres1 needs that command before `RMATRIX` returns the matrix;
+without it the read returns zeros.
 
 Divide and square root use the TGP's seed tables (io 0x28/0x29 and 0x2a/0x2b) with one
 correction step, as Dynamite Cop's program does. They match the i960's result to within
@@ -95,3 +121,9 @@ the result bits in red. Every line also goes to the UART on the first pass. In M
 - `dynamcop` (2A, SDK TGP program): ALL COMMANDS OK
 - `sfight` (2B, STF cpres1; needs `src/cpres1.h`): ALL COMMANDS OK
 - `dynamcopc` (2C): "Model 2C: no COP program yet"
+
+The last twelve lines (`m.c0x` .. `m.tz`) send IDENTITY, SET_POS, ANG_Y, ANG_X, ANG_Z,
+SCALE and SET_POS, then read the matrix back. On `dynamcop` the result is bit-exact to
+the i960 model of the formulas above. On `sfight` cpres1 differs from it by a few ULPs,
+and from 2A by at most 1.7e-6 relative. Most of that comes from the sine tables: cpres1's
+sin 45° is 0x3F3504F7, the TGP's 0x3F3504F3.
