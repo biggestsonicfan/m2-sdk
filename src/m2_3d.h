@@ -171,10 +171,23 @@ static void m2_cop_boot(void) {
     *ctl = save;
 }
 #else
-/* Model 2C: the COP is a TGPx4 (MB86235), a different instruction set with 64-bit program
- * words. The SDK has no program for it yet, so there is no COP: leave the m2_cop_* math to
- * m2_fastmath.h (the default) and don't send COP commands. */
-static void m2_cop_boot(void) { }
+/* Model 2C: the COP is a TGPx4 (MB86235), with 64-bit program words. It runs the SDK's own
+ * program, src/m2_tgpx4_kernel.s (assembled into m2_tgpx4_kernel.h by tools/tgpx4asm.py): the
+ * same FIFO protocol and commands as the 2A kernel. Upload as Dynamite Cop's 2C program does
+ * (model2.cpp copro_ctl1_w / model2c_state::copro_fifo_w): CTL bit31 set = point the loader at
+ * program word 0, every FIFO write then stores half a word (low 32 bits, then high 32 bits),
+ * CTL bit31 clear = run. The TGPx4 is halted from reset until then, so boot it once. */
+#include "m2_tgpx4_kernel.h"
+static void m2_cop_boot(void) {
+    volatile u32 *ctl  = (volatile u32 *)COP_CTL_REG;
+    volatile u32 *fifo = (volatile u32 *)M2_COPFIFO_ADDR;
+    u32 save = *ctl & 0x7FFFFFFFu;
+    int i;
+    *ctl = save | 0x80000000u;
+    for (i = 0; i < (int)(sizeof(m2_tgpx4_kernel) / sizeof(m2_tgpx4_kernel[0])); i++)
+        *fifo = m2_tgpx4_kernel[i];
+    *ctl = save;
+}
 #endif
 
 /* No SHARC GEO on 2A/2C: the geometrizer is a fixed-function chip with no program to load. */

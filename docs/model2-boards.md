@@ -116,7 +116,7 @@ from STF's data ROM, so set your colours with `m2_3d_solid()` or `m2_setcolor()`
 objects that use a two-quad mesh in polygon RAM. After each submit it reads the 19 words
 in buffer RAM (`SUBMIT`'s 18 and the END mark after them) and the returned counts, and
 compares them with the header and with the matrix `RMATRIX` returns after the same
-commands. `dynamcop` and `sfight` both show ALL SUBMITS OK. Comparing the two boards'
+commands. `dynamcop`, `dynamcopc` and `sfight` all show ALL SUBMITS OK. Comparing the two boards'
 `g_obj_words` / `g_obj_counts` with `tools/objtest_cmp.py`, the integer words and counts
 are identical. The matrix words agree to within 1.24e-6 of their column's largest element.
 That bound is per column because an element near 0 can come out as -0 on the TGP and
@@ -124,9 +124,15 @@ That bound is per column because an element near 0 can come out as -0 on the TGP
 
 `src/meshcube.c` draws that path: a spinning cube of six one-quad meshes in polygon RAM,
 each submitted with `m2_obj_submit_hdr()` and its own flat colorbase. In MAME it looks the
-same on `dynamcop` and `sfight`. In a one-quad mesh (mode NP_NS) the corners go lead 0,
+same on `dynamcop`, `dynamcopc` and `sfight`. In a one-quad mesh (mode NP_NS) the corners go lead 0,
 lead 1, then P0 next to lead 0 and P1 next to lead 1: corners `-u-v, +u-v, -u+v, +u+v`. The
 order around the edge (`-u-v, +u-v, +u+v, -u+v`) draws a bow tie.
+
+Each face's attr word has `M2_POLY_ZMIN` (`m2_polyattr.h`, bit 10): the GEO sorts it by
+its nearest vertex. Attr bits 11:10 pick the sort z (MAME `model2_v.cpp`): 0 reuses the
+previous polygon's z, 1 the nearest vertex, 2 the farthest. With 0 every face of a
+one-quad mesh got whatever z came before it, and the back faces drew over the front. With
+the nearest vertex, the three front faces share the cube's nearest corner and win.
 
 The flat-colour patch at (0, 896) is filled with `m2_texram_fill()` (`m2font.h`), which
 writes whole words and reads nothing back. On 2A in MAME a texture RAM read doesn't return
@@ -177,8 +183,49 @@ header.
 
 ## The 2C coprocessor
 
-There is no TGPx4 program yet. On 2C `m2_cop_boot()` does nothing. Use `m2_fastmath.h`
-(the default) for math. The 2D paths (`m2_gfx2d.h`, the font) work.
+On 2C the COP runs the SDK's own TGPx4 (Fujitsu MB86235) program,
+`src/m2_tgpx4_kernel.s`. It has the same commands as the 2A kernel (the cpres1 math and
+matrix commands, PUSH/POP, SUBMIT, ATAN2) and the same command word: the kernel reads
+bits 30:23.
+
+`m2_cop_boot()` uploads it (model2.cpp `copro_ctl1_w`, `model2c_state::copro_fifo_w`):
+set bit 31 of the control register at 0x980000 (that resets the upload counter), write
+each 64-bit instruction to the FIFO at 0x884000 as two u32s, low half first, then clear
+bit 31 to start it. The TGPx4 is halted until then.
+
+How it works:
+
+- A table in A RAM 0x00-0xff holds one handler address per command. The loop reads a
+  command word from the FIFO, shifts out bits 30:23 and jumps through the table
+  (`DJMP A(AR1)`). Every handler ends with `DJMP loop`, the result write in its delay
+  slot.
+- Divide and square root use the TGPx4's `FRCP`/`FRSQ` seeds with two Newton steps, as
+  Dynamite Cop's program does. Sine and cosine are a quadrant fold and a Taylor series
+  (sin to x^11, cos to x^12). `F2INT` rounds down, as on 2A and 2B.
+- The matrix is at A 0x100-0x10b, the stack at A 0x200. `SUBMIT` writes to buffer RAM
+  over the external bus (EB = 0x400000).
+
+MAME's MB86235 core (`mb86235ops.cpp`) has no absolute address mode (EA type 0x0c is a
+fatal error), so the kernel writes `A(@AR6+n)` with AR6 = 0, as Dynamite Cop does. Other
+things the core does that matter when you write TGPx4 code: an instruction's control
+part (branch, call) runs before its ALU part, so a branch tests flags set by an earlier
+instruction; `FSUB x, y` is y - x; every branch has one delay slot, and `DCALL` returns
+to the call + 2.
+
+### Assembler
+
+`tools/tgpx4asm.py` assembles and disassembles MB86235 code in MAME's syntax
+(`mb86235d.cpp`).
+
+```sh
+python3 tools/tgpx4asm.py src/m2_tgpx4_kernel.s --header src/m2_tgpx4_kernel.h --name m2_tgpx4_kernel
+python3 tools/tgpx4asm.py -d prog.bin              # disassemble
+python3 tools/tgpx4asm.py --selftest listing.txt   # check against a MAME dasm listing
+```
+
+The self-test on Dynamite Cop's 2C program (4096 words) disassembles and reassembles every
+word exactly. The assembler rejects the absolute address mode. `src/m2_tgpx4_kernel.h` is
+generated from the `.s`.
 
 ## Test: `src/coptest.c`
 
@@ -189,7 +236,7 @@ the result bits in red. Every line also goes to the UART on the first pass. In M
 
 - `dynamcop` (2A, SDK TGP program): ALL COMMANDS OK
 - `sfight` (2B, STF cpres1; needs `src/cpres1.h`): ALL COMMANDS OK
-- `dynamcopc` (2C): "Model 2C: no COP program yet"
+- `dynamcopc` (2C, SDK TGPx4 program): ALL COMMANDS OK
 
 The twelve `m.` lines (`m.c0x` .. `m.tz`) send IDENTITY, SET_POS, ANG_Y, ANG_X, ANG_Z,
 SCALE and SET_POS, then read the matrix back. On `dynamcop` the result is bit-exact to

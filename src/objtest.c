@@ -10,11 +10,12 @@
  * Then it shows one line per check on screen.
  *
  *   cmake ... -DM2_GAME=objtest -DM2_BOARD=2A     run on dynamcop (the SDK's TGP kernel)
+ *   cmake ... -DM2_GAME=objtest -DM2_BOARD=2C     run on dynamcopc (the SDK's TGPx4 kernel)
  *   cmake ... -DM2_GAME=objtest                   run on sfight (2B, cpres1; needs cpres1.h)
  *
  * The words stay in g_obj_words[] / g_obj_counts[] (g_obj_bad, g_obj_done) for a MAME Lua script, so
  * the two boards' results can be compared word for word. The test doesn't need the objects to be
- * visible. Model 2C has no COP program yet, so the test only reports that there.
+ * visible.
  */
 #include "m2.h"
 #include "m2_obj.h"
@@ -145,18 +146,6 @@ static void show_results(void) {
 int main(void) {
     int i;
     m2_init();
-#if defined(M2_BOARD_2C)
-    g2d_init();
-    g2d_background(M2_RGB(0, 2, 10));
-    g2d_color(1, M2_RGB(31, 31, 31));
-    m2_font_atlas();
-    for (;;) {
-        g2d_begin();
-        g2d_ttext(16, 16, "Model 2C: no COP program yet", 1);
-        g2d_end();
-        m2_vsync();
-    }
-#else
     m2_silicon_boot();
     m2_3d_solid(MESH_CB, M2_RGB(31, 20, 4));
     for (i = 0; i < 8; i++) { m2_frame_begin(); m2_frame_end(); }   /* prime the GEO */
@@ -177,6 +166,5 @@ int main(void) {
         g2d_end();
         m2_vsync();
     }
-#endif
     return 0;
 }

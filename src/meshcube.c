@@ -1,15 +1,14 @@
 /*
  * meshcube.c — a spinning cube of our own mesh, through the m2_obj.h COP path, on any board with a COP.
  *
- * Nothing comes from a game's model table, so it runs on dynamcop (2A, the SDK's TGP kernel) as well
- * as sfight (2B, cpres1). The six faces are six one-quad meshes put in polygon RAM with
- * GEO_OP_POLYDATA; each is submitted with m2_obj_submit_hdr under the same position and angles,
- * with its own flat colorbase. objtest.c checks the words this path writes; this one shows them.
+ * Nothing comes from a game's model table, so it runs on dynamcop (2A, the SDK's TGP kernel) and
+ * dynamcopc (2C, the SDK's TGPx4 kernel) as well as sfight (2B, cpres1). The six faces are six
+ * one-quad meshes put in polygon RAM with GEO_OP_POLYDATA; each is submitted with
+ * m2_obj_submit_hdr under the same position and angles, with its own flat colorbase. objtest.c checks the words this path writes; this one shows them.
  *
  *   cmake ... -DM2_GAME=meshcube -DM2_BOARD=2A     run on dynamcop
+ *   cmake ... -DM2_GAME=meshcube -DM2_BOARD=2C     run on dynamcopc
  *   cmake ... -DM2_GAME=meshcube                   run on sfight (needs cpres1.h)
- *
- * Model 2C has no COP program yet, so there it only says so.
  */
 #include "m2.h"
 #include "m2_obj.h"
@@ -46,8 +45,10 @@ static void upload_faces(void) {
         const signed char *n = g_axes[k][0], *u = g_axes[k][1], *v = g_axes[k][2];
         u32 w[16], *p = w;
         for (c = 0; c < 4; c++) {
-            if (c == 2) {                       /* the quad's unit starts after the 2 leading vertices */
-                *p++ = M2_POLY_QUAD | M2_POLY_LINK2 | M2_POLY_DOUBLE;
+            /* the quad's unit starts after the 2 leading vertices. Sort each face by its nearest
+             * vertex: the faces in front share the cube's nearest corner, the hidden ones don't. */
+            if (c == 2) {
+                *p++ = M2_POLY_QUAD | M2_POLY_LINK2 | M2_POLY_DOUBLE | M2_POLY_ZMIN;
                 for (i = 0; i < 3; i++) *p++ = m2_obj_fb((float)n[i]);
             }
             for (i = 0; i < 3; i++) *p++ = m2_obj_fb(HALF * (float)(n[i] + su[c] * u[i] + sv[c] * v[i]));
@@ -61,18 +62,6 @@ int main(void) {
     u32 t = 0;
     int k, i;
     m2_init();
-#if defined(M2_BOARD_2C)
-    g2d_init();
-    g2d_background(M2_RGB(0, 2, 10));
-    g2d_color(1, M2_RGB(31, 31, 31));
-    m2_font_atlas();
-    for (;;) {
-        g2d_begin();
-        g2d_ttext(16, 16, "Model 2C: no COP program yet", 1);
-        g2d_end();
-        m2_vsync();
-    }
-#else
     m2_silicon_boot();
     m2_obj_fill_patch();
     for (k = 0; k < 6; k++) {
@@ -96,6 +85,5 @@ int main(void) {
         m2_vsync();
         t++;
     }
-#endif
     return 0;
 }

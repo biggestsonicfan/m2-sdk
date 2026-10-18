@@ -2,18 +2,20 @@
  * coptest.c — m2-sdk check: the COP math commands give the same answers on every board.
  *
  * Boots the board's coprocessor (m2_cop_boot: STF's cpres1 SHARC on 2B, the SDK's TGP
- * program src/m2_tgp_kernel.s on 2A), sends each scalar / trig / vector command through the
- * COP FIFO and compares the result with the i960's own float math. One line per command on
- * screen (OK or BAD, result bits, expected bits) and a total at the bottom. Then twelve lines
+ * program src/m2_tgp_kernel.s on 2A, its TGPx4 program src/m2_tgpx4_kernel.s on 2C), sends
+ * each scalar / trig / vector command through the COP FIFO and compares the result with the
+ * i960's own float math. One line per command on screen (OK or BAD, result bits, expected
+ * bits) and a total at the bottom. Then twelve lines
  * for the current matrix after the transform commands m2_obj_submit sends (RMATRIX), eight
  * ATAN2 angles, the PUSH/POP matrix stack, and SUBMIT (the 18 words it writes to buffer RAM
  * and the two counts it returns).
  *
  *   cmake ... -DM2_GAME=coptest -DM2_BOARD=2A     run on dynamcop
+ *   cmake ... -DM2_GAME=coptest -DM2_BOARD=2C     run on dynamcopc
  *   cmake ... -DM2_GAME=coptest                   run on sfight (2B, needs cpres1.h)
  *
  * The results also stay in g_cop_result[] / g_cop_bad / g_cop_done for a debugger or a
- * MAME Lua script. Model 2C has no COP program yet, so the test only reports that there.
+ * MAME Lua script.
  */
 #define M2_NO_FASTMATH   /* keep m2_cop_* on the COP: the point is to test it */
 #include "m2.h"
@@ -257,14 +259,6 @@ int main(void) {
     g2d_color(3, M2_RGB(31, 8, 6));
     m2_font_atlas();
 
-#if defined(M2_BOARD_2C)
-    for (;;) {
-        g2d_begin();
-        g2d_ttext(16, 16, "Model 2C: no COP program yet", 1);
-        g2d_end();
-        m2_vsync();
-    }
-#else
     m2_cop_boot();
     m2_cop_initialize();   /* cpres1 command 0: matrix stack empty, current slot at its base */
     for (;;) {
@@ -276,6 +270,5 @@ int main(void) {
         g2d_end();
         m2_vsync();
     }
-#endif
     return 0;
 }
