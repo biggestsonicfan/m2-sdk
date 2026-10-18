@@ -168,7 +168,7 @@ static void m2_cop_rmatrix(float m[12]) {
  * single result (drain-and-discard form; the STF object preamble in stf_cop_preamble.h uses these).
  * Semantics from the cpres1 disassembly:
  *   COP_INT2F  integer -> float                   (handler: f0 = float r1)
- *   COP_F2INT  float   -> integer, truncate        (handler: r0 = fix f1)
+ *   COP_F2INT  float   -> integer, rounded down    (handler: r0 = fix f1; -3.7 -> -4 in MAME)
  *   COP_DIST2D 4 floats (two XZ points) -> sqrt((x2-x1)^2 + (z2-z1)^2)  (length)
  *   COP_ATAN2  4 floats (two XZ points) -> atan2(z2-z1, x2-x1)  (azimuth, i16) */
 static u32 cop__fbits(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }

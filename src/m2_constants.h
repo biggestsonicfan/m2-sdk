@@ -75,7 +75,7 @@
 #define COP_FMUL      COP_CMD(0x15)  /* in: a,b float; out: a*b                 */
 #define COP_FDIV      COP_CMD(0x16)  /* in: a,b float; out: a/b                 */
 #define COP_INT2F     COP_CMD(0x17)  /* in: int;   out: (float)int              */
-#define COP_F2INT     COP_CMD(0x18)  /* in: float; out: (int)float (truncate)   */
+#define COP_F2INT     COP_CMD(0x18)  /* in: float; out: int, rounded DOWN (cpres1 in MAME: -3.7 -> -4; m2_fastmath truncates) */
 #define COP_SQRT      COP_CMD(0x1A)  /* in: float; out: float sqrt              */
 #define COP_SIN       COP_CMD(0x21)  /* in: i16 angle; out: float sin           */
 #define COP_COS       COP_CMD(0x22)  /* in: i16 angle; out: float cos           */

@@ -26,6 +26,12 @@ see the result.
   asm does it). The sibling `m2-x11` build is newlib/ELF and differs — don't copy
   its `extern char _bss_start[]` idiom here.
 
+## Other boards
+
+`-DM2_BOARD=2A|2C` builds for Model 2A (`dynamcop`) / 2C (`dynamcopc`); default 2B.
+2A's COP runs the SDK's TGP program `src/m2_tgp_kernel.s` (edit the `.s`, regenerate the
+`.h` with `tools/tgpasm.py`); 2C has no COP program. See `docs/model2-boards.md`.
+
 ## Which render path? (read this first)
 
 The SDK boots the **real SHARC/GEO**; test it by launching MAME with
