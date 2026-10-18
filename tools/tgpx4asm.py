@@ -333,9 +333,7 @@ class Asm:
             mm = re.fullmatch(rx, body)
             if mm:
                 g = mm.groups()
-                if md == 12:
-                    if not self.listing:   # mb86235ops.cpp decode_ea: fatalerror "illegal decode_ea type 0c"
-                        raise AsmError("MAME has no absolute address mode: write A(@ARn+%s) with ARn = 0" % body)
+                if md == 12:               # absolute: the displacement field is the address
                     arx, ary, disp = 0, 0, int(g[0], 16)
                 else:
                     arx = int(g[0])
@@ -343,6 +341,17 @@ class Asm:
                     disp = int(g[-1], 16) if md in (3, 7, 10, 11, 15) else 0
                 return 0x40 | (0x20 if bank == "B" else 0) | arx, md, ary, disp
         raise AsmError("bad address %r" % s)
+
+    @staticmethod
+    def disp(v, mask, form):
+        """A displacement (or absolute address) that must fit the form's field."""
+        if v & ~mask:
+            raise AsmError("%XH does not fit %s's displacement field (0-%XH)" % (v, form, mask))
+        return v
+
+    def no_abs(self, md, form):
+        if md == 12:
+            raise AsmError("%s has no displacement field for an absolute address: use MOV1/MOV2/MOV3" % form)
 
     def operand(self, s):
         """register -> (index, None); address -> (code, (md, ary, disp))."""
@@ -487,7 +496,7 @@ class Asm:
             w = sr << 19 | dr << 12
         if ea:
             md, ary, disp = ea
-            w |= (disp & 0x1f) << 7 | ary << 4 | md
+            w |= self.disp(disp, 0x1f, "MOV1") << 7 | ary << 4 | md
         return w
 
     def mov2(self, name, rest):
@@ -518,7 +527,7 @@ class Asm:
             w = sr << 31 | dr << 24
         if ea:
             md, ary, disp = ea
-            w |= (disp & 0x3fff) << 7 | ary << 4 | md
+            w |= self.disp(disp, 0x3fff, "MOV2") << 7 | ary << 4 | md
         return w
 
     def mov3(self, rest):
@@ -528,7 +537,7 @@ class Asm:
         w = 7 << 61 | imm << 27 | dr << 19
         if ea:
             md, ary, disp = ea
-            w |= (disp & 0xfff) << 7 | ary << 4 | md
+            w |= self.disp(disp, 0xfff, "MOV3") << 7 | ary << 4 | md
         return w
 
     def mvd1(self, rest):
@@ -542,6 +551,7 @@ class Asm:
             aea, areg, bea, breg = a
         ca, md, ay, _ = self.ea(aea)
         cb, _, by, _ = self.ea(bea)
+        self.no_abs(md, "MVD1")
         if md == 8 or md == 9:
             pass  # B side prints the other of U/L; md comes from the A side
         return (sd << 25 | (self.reg(areg) & 0x1f) << 20 | (ca & 7) << 17 | ay << 14 |
@@ -553,6 +563,7 @@ class Asm:
         sd = 1 if a[0] in REG else 2
         reg, ea = (a[0], a[1]) if sd == 1 else (a[1], a[0])
         c, md, ary, _ = self.ea(ea if ea.endswith(")") else ea + ")")
+        self.no_abs(md, "MVD2")
         return sd, (self.reg(reg) & 0x1f) << 13 | (c & 7) << 10 | ary << 7 | md
 
     def mvd2(self, rest):
@@ -564,6 +575,7 @@ class Asm:
     def movi(self, rest):
         a = [x.strip() for x in rest.split(",")]
         c, md, ary, disp = self.ea(a[0])
+        self.no_abs(md, "MOVI")
         m = re.fullmatch(r"I\(@AR(\d)\+\+\)", a[1])
         return 4 << 61 | 3 << 38 | int(m.group(1)) << 30 | (c & 7) << 10 | ary << 7 | (disp & 7) << 4 | md
 

@@ -205,18 +205,33 @@ How it works:
 - The matrix is at A 0x100-0x10b, the stack at A 0x200. `SUBMIT` writes to buffer RAM
   over the external bus (EB = 0x400000).
 
-MAME's MB86235 core (`mb86235ops.cpp`) has no absolute address mode (EA type 0x0c is a
-fatal error), so the kernel writes `A(@AR6+n)` with AR6 = 0, as Dynamite Cop does.
+The kernel writes fixed words as `A(@AR6+n)` with AR6 = 0, as Dynamite Cop does, so it runs
+on any MAME. The absolute address mode (EA type 0x0c, `A(nnnH)` / `B(nnnH)`: the address is
+the displacement field alone, no AR register) works too, but only on a core that has it:
 
-Why it is missing: MAME's interpreter has only the modes some game runs. It began in
+- MAME: the fork's `shared` branch (branch `tgpx4-abs-ea`, `mb86235ops.cpp` `decode_ea`
+  and the recompiler's `generate_ea`). Upstream MAME and older builds stop with
+  "TGPx4: illegal decode_ea type 0c executed".
+- m2-hle2: `src/board/tgpx4.h` `tgx_ea`, with a check in `tests/tgpx4_test.c`.
+
+Why upstream lacks it: MAME's interpreter has only the modes some game runs. It began in
 2018 (commit 3344b2f6) with eight modes and a fatal "unemulated decode_ea type" for the
 rest; the 2025 rewrite (1cd73332, #13718) added the modes the 2C games needed and renamed
 the error "illegal". No game needs 0x0c. The TGPx4 programs of every 2C set we have
 (bel, dynamcopc, hotd, segawski, skisuprg, topskatr, waverunr: six different programs,
 about 4,700 memory operands) never use it; they all address fixed words as `@ARn+disp`.
 The mode exists: MAME's disassembler prints it as `A(nnnH)` and the recompiler front end
-(`mb86235fe.cpp` `describe_ea`, "@disp") knows it. In the interpreter it would be one line
-in `decode_ea` (`case 0x0c: return disp;`), but no program can check it against a board.
+(`mb86235fe.cpp` `describe_ea`, "@disp") knows it. No program has checked it against a
+board, so `src/abstest.c` checks it against the other address modes (below).
+
+How wide the address is depends on the form, since it is the displacement field:
+
+| Form | Field | Reaches |
+|------|-------|---------|
+| `MOV1` (two ALU ops) | 5 bits | A/B 0x00-0x1f |
+| `MOV2` | 14 bits | A/B 0x000-0x3ff; on A, 0x400 and up is the external bus at `(EB & 0xffc000) + addr` |
+| `MOV3` (immediate) | 12 bits | A/B 0x000-0x3ff, A 0x400-0xfff external |
+| `MVD1`, `MVD2`, `MOVI` | none | (the assembler refuses) |
 
 Other
 things the core does that matter when you write TGPx4 code: an instruction's control
@@ -236,8 +251,8 @@ python3 tools/tgpx4asm.py --selftest listing.txt   # check against a MAME dasm l
 ```
 
 The self-test on Dynamite Cop's 2C program (4096 words) disassembles and reassembles every
-word exactly. The assembler rejects the absolute address mode. `src/m2_tgpx4_kernel.h` is
-generated from the `.s`.
+word exactly. An absolute address must fit its form's field (the table above), or the
+assembler stops with an error. `src/m2_tgpx4_kernel.h` is generated from the `.s`.
 
 ## Test: `src/coptest.c`
 
@@ -269,3 +284,19 @@ The last nine lines test the matrix stack and `SUBMIT`. All of them must match e
 
 The test writes at the GEO write cursor and leaves it there, so the frame's display list
 writes over those words afterwards.
+
+## Test: `src/abstest.c` (2C)
+
+`-DM2_GAME=abstest -DM2_BOARD=2C` loads its own TGPx4 program, `src/abstest_tgpx4.s`, in
+place of the SDK kernel (`m2_cop_load`), and tests the absolute address mode in every form
+that has it: MOV2 on A and B, MOV1, MOV3, and the external bus (buffer RAM) by MOV2 and MOV3.
+Each test writes with one mode and reads back with the other (absolute, or `@AR7+n` with
+AR7 = 0). AR0 is 0x40, and an absolute operand's AR field encodes AR0, so a core that added
+the AR would miss the word. The last two lines check that AR0 and AR7 did not change.
+
+The program sends 0x0AB5 once it is ready. It must: its `CLRF` empties the FIFO, so a word
+the i960 sent before that is lost and the i960 then waits for an answer that never comes.
+
+On `dynamcopc`, the shared MAME and m2-hle2 show thirteen OK lines and ALL ABSOLUTE MODES
+OK. MAME without the fork branch stops at the first absolute operand. The results are also in
+`g_abs_result[]`, `g_abs_bad` and `g_abs_done` for a debugger or a Lua script.

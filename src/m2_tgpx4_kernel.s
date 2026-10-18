@@ -10,8 +10,8 @@
 ; FI = input FIFO (a read waits for data), FO0 = output FIFO (a write waits for room). The
 ; external bus at 0x400000 is buffer RAM (i960 0x900000), one word per address: SUBMIT
 ; writes there through EB + EO. Internal A RAM (0x400 words) holds the dispatch table, the
-; current matrix and the matrix stack. MAME's interpreter has no absolute address mode (0x0c),
-; so a fixed word is A(@AR6+n) with AR6 = 0, as in Dynamite Cop's program.
+; current matrix and the matrix stack. A fixed word is A(@AR6+n) with AR6 = 0, as in Dynamite
+; Cop's program: upstream MAME has no absolute address mode (0x0c; docs/model2-boards.md).
 ;
 ; Timing rules this code relies on (mb86235ops.cpp): one delay slot after every branch, call
 ; and return; a branch tests the flags left by an earlier instruction; in one instruction the

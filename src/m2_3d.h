@@ -178,15 +178,20 @@ static void m2_cop_boot(void) {
  * program word 0, every FIFO write then stores half a word (low 32 bits, then high 32 bits),
  * CTL bit31 clear = run. The TGPx4 is halted from reset until then, so boot it once. */
 #include "m2_tgpx4_kernel.h"
-static void m2_cop_boot(void) {
+/* Upload and start any TGPx4 program: n u32s, two per 64-bit word, low half first (what
+ * tools/tgpx4asm.py --header writes). src/abstest.c runs its own program this way. */
+static void m2_cop_load(const u32 *prog, int n) {
     volatile u32 *ctl  = (volatile u32 *)COP_CTL_REG;
     volatile u32 *fifo = (volatile u32 *)M2_COPFIFO_ADDR;
     u32 save = *ctl & 0x7FFFFFFFu;
     int i;
     *ctl = save | 0x80000000u;
-    for (i = 0; i < (int)(sizeof(m2_tgpx4_kernel) / sizeof(m2_tgpx4_kernel[0])); i++)
-        *fifo = m2_tgpx4_kernel[i];
+    for (i = 0; i < n; i++)
+        *fifo = prog[i];
     *ctl = save;
+}
+static void m2_cop_boot(void) {
+    m2_cop_load(m2_tgpx4_kernel, (int)(sizeof(m2_tgpx4_kernel) / sizeof(m2_tgpx4_kernel[0])));
 }
 #endif
 
