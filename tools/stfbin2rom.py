@@ -7,6 +7,7 @@ parser.add_argument('--input', dest='input', type=argparse.FileType('rb', 0), he
 parser.add_argument('--output', dest='output', type=str, help='[Optional] Output directory for split ROMs (Input directory used by default)')
 parser.add_argument('--verify', dest='verify', action=argparse.BooleanOptionalAction, help='[Optional] Use MD5 checksum verification on output (uses \"sfight.md5\" in script directory)')
 parser.add_argument('--ctools', dest='win', action=argparse.BooleanOptionalAction, help='[Optional] Handle stupid ctools stuff')
+parser.add_argument('--names', dest='names', nargs=2, metavar=('LO', 'HI'), default=['epr-19001.15', 'epr-19002.16'], help='[Optional] Output file names of the two EPROMs (default: sfight\'s epr-19001.15 epr-19002.16)')
 parser.add_argument('--nopad', dest='nopad', action=argparse.BooleanOptionalAction, help='[Optional] Do NOT pad the ROM binary to 0x100000 with 0xFF (split as-is)')
 
 def SizeRom(rom, win, nopad=False):
@@ -51,7 +52,7 @@ def main():
             if os.path.isfile(args.input.name) == False:
                 raise FileNotFoundError
             
-            output_files = ["epr-19001.15", "epr-19002.16"]
+            output_files = args.names
             with args.input as rom, open(os.path.join(output_dir, output_files[0]), 'wb') as epr15, open(os.path.join(output_dir, output_files[1]), 'wb') as epr16:
                 print("Attempting to create split ROM")
                 for chunk1 in iter(partial(rom.read, 2), b''):

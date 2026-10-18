@@ -32,6 +32,7 @@ typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;
 
+#include "m2_board.h"   /* M2_BOARD_2A/2B/2C (default 2B): render mode, texture/luma RAM */
 #include "m2_debug.h"   /* M2_DBG / M2_DBGH serial trace (no-op unless -DM2_DEBUG) */
 #include "m2_workaround.h" /* three-target quirk shims (m2emu MEMB dodge, g14 double-write) */
 #include "m2_wait.h"    /* instrumented hardware waits (m2_waitdbg record + M2W_* sites) */
@@ -318,11 +319,21 @@ M2_API void m2__build_colorxlat(void) {
 
 /* STF start_again_ip @0x488: LUMA2 ramp at 0x12800000 — LUMA2[i] = (i+1)>>1 for 128
  * shorts (0,1,1,2,2,...,64). The polygon pipeline reads this luminance ramp; left
- * uninitialised it's garbage. */
+ * uninitialised it's garbage. On 2A 0x12800000 is the luma RAM itself, one entry per
+ * 32-bit word (m2_board.h), so the same ramp goes there at that stride; 2C has nothing
+ * mapped there (MAME model2c_crx_mem) and dynamcopc never writes it. */
 M2_API void m2__build_luma2(void) {
+#if defined(M2_BOARD_2A)
+    volatile u32 *luma2 = (volatile u32 *)0x12800000u;
+#else
     volatile u16 *luma2 = (volatile u16 *)0x12800000u;
+#endif
     u32 i;
+#if defined(M2_BOARD_2C)
+    (void)luma2; (void)i;
+#else
     for (i = 0; i < 128u; i++) luma2[i] = (u16)((i + 1u) >> 1);
+#endif
 }
 
 /* Copy the 8x8 font into char RAM, one copy per palette bank (tile gfx is indexed by
@@ -346,7 +357,7 @@ M2_API void m2_init(void) {
     m2__build_luma2();        /* STF start_again_ip: LUMA2 (0x12800000) ramp */
     m2_setpal(0, 0);          /* default backdrop = black (games may override) */
 
-    M2_RENDERMODE = 0x4004;     /* STF start_again_ip writes 0x4004 to 0x10000000 (was 0x04) */
+    M2_RENDERMODE = M2_BOARD_RENDERMODE; /* STF start_again_ip: 0x4004; 2A: 4 (m2_board.h) */
     M2_HSYNC = (u16)-84;        /* 0xFFAC — matches STF start_again_ip */
     M2_VSYNC = (u16)-3;         /* 0xFFFD — STF's value (was -2/0xFFFE, one line off) */
     M2_VIDEO_CTRL = 0;

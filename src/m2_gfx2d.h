@@ -236,11 +236,11 @@ static void g2d_text_scaled(float x, float y, const char *s, u32 cb, int scale) 
 static void g2d_text(float x, float y, const char *s, u32 cb) { g2d_text_scaled(x, y, s, cb, 1); }
 
 /* ---- textured quads (de-risk spike toward crisp glyph fonts) ------------- *
- * Texels live in texram0 (0x11000000) in a 2x2-swizzled 4bpp layout; texture
+ * Texels live in texram0 (M2_BOARD_TEXRAM0; 0x11000000 on 2B) in a 2x2-swizzled 4bpp layout; texture
  * headers + per-vertex UVs live in the GEO texture_ram, written via cmd 0x04
  * (bit 0x800000). A texel is a luminance mask of the colorbase hue; value 0xf
  * (15) is TRANSPARENT. (See memory/model2-texture-format.) */
-#define G2D_TEXRAM0 ((volatile u32 *)0x11000000u)
+#define G2D_TEXRAM0 ((volatile u32 *)M2_BOARD_TEXRAM0)   /* 2A: use m2_tex_wr32 (16-bit lanes) */
 
 /* texel write is shared: m2_texram0_texel (m2font.h) */
 
@@ -329,6 +329,9 @@ static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
 static void g2d_ttext_scaled(float x, float y, const char *s, u32 cb, float scale) {
     int i;
     float gw = 8.0f * scale;
+    /* Each glyph is an 11-word UV block plus a 20-word quad; stop at the first one that would
+     * not fit whole (a cut-off TEXDATA block before the END crashes MAME's geo parser). */
+    if (g2d__n + 7 + 11 + 20 + 1 > 0x3000) return;
     /* atlas header: 128x64 (wbits=2,hbits=1), sheet0, transparent(bit13)+textured(bit14) */
     g2d__w(G2D_OP_TEXDATA); g2d__w(G2D_TEXRAM_BIT | G2D_FONT_HDR); g2d__w(4u);
     g2d__w(0x6000u | 2u | (1u << 3));       /* th0: textured + transparent (bg texel 0xf) */
@@ -343,6 +346,7 @@ static void g2d_ttext_scaled(float x, float y, const char *s, u32 cb, float scal
         uv[2] = v0;     uv[3] = u0 + 8;
         uv[4] = v0 + 8; uv[5] = u0 + 8;
         uv[6] = v0 + 8; uv[7] = u0;
+        if (g2d__n + 11 + 20 + 1 > 0x3000) return;
         g2d_tex_uv(G2D_FONT_UV, uv);
         g2d_tquad(x + (float)i * gw, y, gw, gw, G2D_FONT_UV, G2D_FONT_HDR);
     }

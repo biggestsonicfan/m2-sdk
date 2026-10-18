@@ -28,6 +28,16 @@ Build a different program with `-DM2_GAME=<name>` (compiles `src/<name>.c`).
 Drop your own `.c` in `src/` and reconfigure. Or use the equivalent batch script:
 `cmd /c ".\build_clang64.bat demo"`.
 
+### Model 2A and 2C
+
+`-DM2_BOARD=2A` or `2C` builds for the other Model 2 boards (default `2B`). 2A runs on
+`dynamcop`, 2C on `dynamcopc`. On 2A the COP runs the SDK's own TGP program
+(`src/m2_tgp_kernel.s`: the cpres1 math and matrix commands, PUSH/POP
+and SUBMIT); on 2C its TGPx4 program (`src/m2_tgpx4_kernel.s`, same commands). The
+`m2_obj.h` 3D path runs on 2A and 2C with your own
+object headers (`m2_obj_submit_hdr`); STF's model table is only in `sfight`. Details, the
+address map, `src/coptest.c`, `src/objtest.c`, `src/meshcube.c` (a spinning cube on all three boards) and `src/abstest.c` (the 2C TGPx4's absolute address mode): [`docs/model2-boards.md`](docs/model2-boards.md).
+
 ### Soft-float (DEFAULT — the real i960 has no usable FPU)
 
 **The real Model 2 i960 has no usable FPU.** MAME *emulates* one, so native i960 FP
@@ -138,6 +148,8 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport (uses `M2_IO`). |
 | `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
+| `m2_board.h` | Which board (`M2_BOARD_2A`/`2B`/`2C`) and the addresses that differ. Included by `m2_constants.h`. |
+| `m2_tgp_kernel.s` / `.h` | The SDK's Model 2A COP program (TGP) and its generated header; `m2_cop_boot` uploads it on 2A. |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
 `i_table.s`, `i_handle.s` (assembled automatically by the build).
@@ -174,7 +186,7 @@ i.e. `C:\msys64\clang64\bin`. That directory **must be on `PATH`** — otherwise
 src/      SDK headers (m2*.h) + i960 boot/IRQ asm (*.s) + your game .c
           (+ your extracted cpres*.h firmware blobs — git-ignored)
 lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum)
-tools/    stfbin2rom.py (split the ROM image), bin2c.py
+tools/    stfbin2rom.py (split the ROM image), bin2c.py, tgpasm.py (TGP assembler)
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```
 

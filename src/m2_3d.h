@@ -17,6 +17,7 @@
 #define M2_3D_H
 
 #include "m2_constants.h" /* the hardware map: coprocessor regs, FIFO addrs, GEO slots/opcodes */
+#if M2_BOARD_SHARC  /* Model 2B: two SHARCs, booted from STF's (or psled's) firmware ---------------------- */
 /* ---- per-profile coprocessor firmware — THE single source of truth ----------------------------
  * cpres1 (COP) + cpres2 (GEO) SHARC microcode differ by game. Pull in ONLY the selected profile's
  * two blobs — the other game's ~24k halfwords would be dead ROM weight — and name them in the SAME
@@ -53,8 +54,11 @@
 #define M2_COP_DMACNT  (M2_COP_FW_N / 3)      /* 48-bit SHARC opcode = 3 firmware halfwords */
 #define M2_GEO_DMACNT  (M2_GEO_FW_N / 3)
 
+#endif /* M2_BOARD_SHARC */
+
 #include "m2_math.h"   /* COP command FIFO + COP_* opcodes + scalar/vector/matrix math (+ fastmath override) */
 
+#if M2_BOARD_SHARC
 /* Host-boot an ADSP-2106x copro: ctl reg, IOP base, FIFO, firmware + count, and
  * the two SYSCON values + DMA params (per copro_down / copro_down2). */
 static void m2__copro_upload(u32 ctl_addr, u32 iop_base, u32 fifo_addr,
@@ -146,6 +150,59 @@ static void m2_3d_boot(void) {
     m2_geo_boot();
 }
 
+#else /* !M2_BOARD_SHARC */
+
+#if defined(M2_BOARD_2A)
+/* Model 2A: the COP is a TGP (MB86234). It runs the SDK's own program, src/m2_tgp_kernel.s
+ * (assembled into m2_tgp_kernel.h by tools/tgpasm.py), which answers the same FIFO protocol
+ * for the scalar, trig, vector and matrix commands, PUSH/POP and COP_SUBMIT; see the list at
+ * the top of the .s file. Upload as Dynamite Cop's 2A program does
+ * (model2.cpp copro_ctl1_w / copro_fifo_w): CTL bit31 set = halt and point the loader at
+ * program word 0, every FIFO write then stores one 32-bit program word, CTL bit31 clear = run. */
+#include "m2_tgp_kernel.h"
+static void m2_cop_boot(void) {
+    volatile u32 *ctl  = (volatile u32 *)COP_CTL_REG;
+    volatile u32 *fifo = (volatile u32 *)M2_COPFIFO_ADDR;
+    u32 save = *ctl & 0x7FFFFFFFu;
+    int i;
+    *ctl = save | 0x80000000u;
+    for (i = 0; i < (int)(sizeof(m2_tgp_kernel) / sizeof(m2_tgp_kernel[0])); i++)
+        *fifo = m2_tgp_kernel[i];
+    *ctl = save;
+}
+#else
+/* Model 2C: the COP is a TGPx4 (MB86235), with 64-bit program words. It runs the SDK's own
+ * program, src/m2_tgpx4_kernel.s (assembled into m2_tgpx4_kernel.h by tools/tgpx4asm.py): the
+ * same FIFO protocol and commands as the 2A kernel. Upload as Dynamite Cop's 2C program does
+ * (model2.cpp copro_ctl1_w / model2c_state::copro_fifo_w): CTL bit31 set = point the loader at
+ * program word 0, every FIFO write then stores half a word (low 32 bits, then high 32 bits),
+ * CTL bit31 clear = run. The TGPx4 is halted from reset until then, so boot it once. */
+#include "m2_tgpx4_kernel.h"
+/* Upload and start any TGPx4 program: n u32s, two per 64-bit word, low half first (what
+ * tools/tgpx4asm.py --header writes). src/abstest.c runs its own program this way. */
+static void m2_cop_load(const u32 *prog, int n) {
+    volatile u32 *ctl  = (volatile u32 *)COP_CTL_REG;
+    volatile u32 *fifo = (volatile u32 *)M2_COPFIFO_ADDR;
+    u32 save = *ctl & 0x7FFFFFFFu;
+    int i;
+    *ctl = save | 0x80000000u;
+    for (i = 0; i < n; i++)
+        *fifo = prog[i];
+    *ctl = save;
+}
+static void m2_cop_boot(void) {
+    m2_cop_load(m2_tgpx4_kernel, (int)(sizeof(m2_tgpx4_kernel) / sizeof(m2_tgpx4_kernel[0])));
+}
+#endif
+
+/* No SHARC GEO on 2A/2C: the geometrizer is a fixed-function chip with no program to load. */
+static void m2_geo_boot(void) { }
+
+static void m2_3d_boot(void) {
+    m2_cop_boot();
+}
+#endif /* M2_BOARD_SHARC */
+
 /* STF cop_initialize: ARM the COP (cpres1) for rendering — wait until it reports ready (CTL 0x980004
  * bit0), draining any pending words from its FIFO, then write 0 to the FIFO. STF's per-object render
  * setup order is:  geo_func -> cop_initialize -> geo_initialize -> geometry_stuff -> texture upload.
@@ -157,6 +214,10 @@ static void m2_cop_initialize(void) {
     volatile u32 *cop_ctl  = (volatile u32 *)COP_STATUS_REG;
     volatile u32 *cop_fifo = (volatile u32 *)M2_COPFIFO_ADDR;
     u32 g = 0, v;
+#if !M2_BOARD_SHARC
+    (void)cop_ctl; (void)g; (void)v;   /* no COP status register on 2A/2C (model2.cpp maps only CTL) */
+    return;
+#endif
     /* compound wait (drains the FIFO per poll) — bracketed by hand, not m2_wait_mask32 */
     m2_wait_enter(M2W_COP_ARM);
     while (!((v = *cop_ctl) & 1u) && ++g < 200000u) { (void)*cop_fifo; m2_wait_beat(g); }

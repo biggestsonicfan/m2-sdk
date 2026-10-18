@@ -156,7 +156,8 @@ static void m2_cop_rot2d(u32 ang, float x, float y, float out[2]) {  /* (x*cos -
     out[0] = m2_cop_gf(); out[1] = m2_cop_gf();
 }
 
-/* Load/read a 3x4 matrix (row-major: 3 rows of [r0 r1 r2 t]) to/from a COP bone slot. */
+/* Load/read the COP's current 3x4 matrix: column 0, column 1, column 2 (x,y,z each), then the
+ * translation x,y,z (cpres1 layout; coptest checks the RMATRIX order on sfight). */
 static void m2_cop_wmatrix(const float m[12]) {
     int i; m2_cop(COP_WMATRIX); for (i = 0; i < 12; i++) m2_cop_pf(m[i]);
 }
@@ -168,7 +169,7 @@ static void m2_cop_rmatrix(float m[12]) {
  * single result (drain-and-discard form; the STF object preamble in stf_cop_preamble.h uses these).
  * Semantics from the cpres1 disassembly:
  *   COP_INT2F  integer -> float                   (handler: f0 = float r1)
- *   COP_F2INT  float   -> integer, truncate        (handler: r0 = fix f1)
+ *   COP_F2INT  float   -> integer, rounded down    (handler: r0 = fix f1; -3.7 -> -4 in MAME)
  *   COP_DIST2D 4 floats (two XZ points) -> sqrt((x2-x1)^2 + (z2-z1)^2)  (length)
  *   COP_ATAN2  4 floats (two XZ points) -> atan2(z2-z1, x2-x1)  (azimuth, i16) */
 static u32 cop__fbits(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }

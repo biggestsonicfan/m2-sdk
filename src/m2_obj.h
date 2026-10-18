@@ -83,15 +83,12 @@ static void m2_load_model_palette(u32 model) {
 #define M2_OBJ_PATCH_TH2 M2_TH2_TILE(M2_OBJ_PATCH_X, M2_OBJ_PATCH_Y)
 
 static int m2__obj_patch_done = 0;
-/* texel write is shared: m2_texram0_texel (m2font.h). */
+/* texram writes are shared: m2_texram_fill (m2font.h). */
 /* Fill the 128x128 uniform-luma patch (opaque texel 0xE). Idempotent; call after your texram is set
  * up (also lazily run by m2_solid_quad). */
 static void m2_obj_fill_patch(void) {
-    int x, y;
     if (m2__obj_patch_done) return;
-    for (y = 0; y < 128; y++)
-        for (x = 0; x < 128; x++)
-            m2_texram0_texel((int)M2_OBJ_PATCH_X + x, (int)M2_OBJ_PATCH_Y + y, 0xEu);
+    m2_texram_fill(M2_BOARD_TEXRAM0, (int)M2_OBJ_PATCH_X, (int)M2_OBJ_PATCH_Y, 128, 128, 0xEu);
     m2__obj_patch_done = 1;
 }
 /* Write a flat-colour texture header for colorbase cb into texture_ram (slot cb*4), sampling the
@@ -137,12 +134,13 @@ static void m2__obj_commit(volatile u32 *cf, u32 tpa, u32 tha, u32 oba, u32 obc)
 
 /* ---- per-OBJECT submit (after m2_obj_frame_setup; threads multiple objects via g_cop_p) ----------
  * Transform stream (identity/pos/angles/scale) + polygon_submit(0x78) = the COMMIT, then the GEO END
- * mark. tha_override != 0 replaces the model's material header (e.g. a flat colorbase header for model
- * 456); 0 = use the model's own. */
-static void m2_obj_submit(u32 model_no, u32 tha_override, u32 px, u32 py, u32 pz,
-                          u32 ax, u32 ay, u32 az, u32 sxb, u32 syb, u32 szb) {
+ * mark. hdr = the object's 4-word header {tpa, tha, oba, obc}, anywhere the i960 can read it: a model
+ * table in ROM, or your own header for a mesh you put in polygon RAM (GEO_OP_POLYDATA). This form runs
+ * on every board with a COP program (2B cpres1, the 2A TGP kernel). tha_override != 0 replaces the
+ * header's material word (e.g. a flat colorbase header); 0 = use the header's own. */
+static void m2_obj_submit_hdr(const volatile u32 *hdr, u32 tha_override, u32 px, u32 py, u32 pz,
+                              u32 ax, u32 ay, u32 az, u32 sxb, u32 syb, u32 szb) {
     volatile u32 *cf = (volatile u32 *)M2_COPFIFO_ADDR;
-    volatile const u32 *hdr = (volatile const u32 *)(M2_MODEL_TABLE + model_no * 16u);
     u32 tha = tha_override ? tha_override : hdr[1];
     *cf = COP_IDENTITY;                                          /* set_identity */
     *cf = COP_SET_POS; *cf = px; *cf = py; *cf = pz;             /* set_pos */
@@ -151,6 +149,15 @@ static void m2_obj_submit(u32 model_no, u32 tha_override, u32 px, u32 py, u32 pz
     *cf = COP_ANG_Z; *cf = az;
     *cf = COP_SCALE; *cf = sxb; *cf = syb; *cf = szb;            /* per-axis scale */
     m2__obj_commit(cf, hdr[0], tha, hdr[2], hdr[3]);             /* tha may be the override */
+}
+
+/* A model from STF's model table (M2_MODEL_TABLE). Only the sfight data ROM has that table: on
+ * another game's data ROM (dynamcop on 2A) the address holds that game's data, so use
+ * m2_obj_submit_hdr with your own header there. */
+static void m2_obj_submit(u32 model_no, u32 tha_override, u32 px, u32 py, u32 pz,
+                          u32 ax, u32 ay, u32 az, u32 sxb, u32 syb, u32 szb) {
+    m2_obj_submit_hdr((const volatile u32 *)(M2_MODEL_TABLE + model_no * 16u), tha_override,
+                      px, py, pz, ax, ay, az, sxb, syb, szb);
 }
 
 /* Convenience: one flat-colour quad (model 456) of colorbase cb (colour = palram[cb+0x1000]). Writes

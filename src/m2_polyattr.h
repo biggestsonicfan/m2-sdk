@@ -37,6 +37,8 @@
 #define M2_POLY_LINK3    (3u << 8)
 #define M2_POLY_SINGLE   (0u << 17) /* sidedness (bit 17): single-sided (back-face culled)   */
 #define M2_POLY_DOUBLE   (1u << 17) /* sidedness (bit 17): double-sided                      */
+#define M2_POLY_ZMIN     (1u << 10) /* z-sort (bits 11:10) by the nearest vertex; 0 = reuse the
+                                       previous polygon's z, 2 = farthest (MAME model2_v.cpp)  */
 
 /* The value every draw path already emits for a flat double-sided quad. */
 _Static_assert((M2_POLY_QUAD | M2_POLY_LINK1 | M2_POLY_DOUBLE) == GEO_POLY_QUAD,

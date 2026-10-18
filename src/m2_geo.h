@@ -167,10 +167,7 @@ static void geo_color_header(u32 cb) {
  * GEO instead of sampling garbage. (m2_obj.h has its own patch at (0,896) for the COP path;
  * this one matches geo_color_header's th2=(0,0).) */
 static void geo_fill_color_patch(void) {
-    int x, y;
-    for (y = 0; y < 128; y++)
-        for (x = 0; x < 128; x++)
-            m2_texram0_texel(x, y, 0xEu);
+    m2_texram_fill(M2_BOARD_TEXRAM0, 0, 0, 128, 128, 0xEu);
 }
 
 /* Flat-colored quad (v0,v1,v2,v3 cyclic). */

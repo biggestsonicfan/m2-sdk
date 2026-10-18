@@ -126,8 +126,8 @@ static int m2_spr_clip_x0 = 0, m2_spr_clip_y0 = 0, m2_spr_clip_x1 = 496, m2_spr_
 
 /* one texel of the atlas, both texram0 bank windows (as m2_font_atlas does) */
 static void m2__spr_texel(u32 x, u32 y, u8 t) {
-    m2_texram_texel_at(0x11000000u, (int)(M2_SPR_TEX_X + x), (int)(M2_SPR_TEX_Y + y), t);
-    m2_texram_texel_at(0x11200000u, (int)(M2_SPR_TEX_X + x), (int)(M2_SPR_TEX_Y + y), t);
+    m2_texram_texel_at(M2_BOARD_TEXRAM0, (int)(M2_SPR_TEX_X + x), (int)(M2_SPR_TEX_Y + y), t);
+    m2_texram_texel_at(M2_BOARD_TEXRAM1, (int)(M2_SPR_TEX_X + x), (int)(M2_SPR_TEX_Y + y), t);
 }
 
 /* Load a w x h image of 4-bit pens (pix[y*stride + x], 1..15 drawn, 0 clear) into texture
@@ -382,9 +382,9 @@ static void m2_spr_draw(int id, int x, int y, u32 flags, const u16 *pen_cb, int 
 
 /* The lumaram table. Once, before drawing in palette mode. */
 static void m2_spr_palette_init(void) {
-    volatile u16 *L = (volatile u16 *)M2_LUMARAM + (M2_SPR_LUMABASE << 7);
     int i;
-    for (i = -4; i < 124; i++) L[i] = (u16)((15 - (i + 4) / 8) * 4 + 2);   /* texel*8 - 4 .. + 3 */
+    for (i = -4; i < 124; i++)                                             /* texel*8 - 4 .. + 3 */
+        m2_luma_wr((M2_SPR_LUMABASE << 7) + (u32)i, (u32)((15 - (i + 4) / 8) * 4 + 2));
 }
 
 /* Colorbase cb draws in palette mode with the colours of row (0..31). */
@@ -411,14 +411,14 @@ static void m2_spr_palette_pen(u32 row, u32 pen, u16 bgr555) {
  * columns 0..3 of two rows (model2rd.ipp get_texel). Only texram0: mip level 0 reads nothing
  * else, and m2_spr_draw_tex never leaves level 0. Fast enough to run per frame. */
 static void m2_spr_tex_cell(u32 tx, u32 ty, const u32 *rows) {
-    volatile u32 *T = (volatile u32 *)0x11000000u + ((M2_SPR_TEX_Y + ty) >> 1) * 256u + ((M2_SPR_TEX_X + tx) >> 2);
+    u32 w = ((M2_SPR_TEX_Y + ty) >> 1) * 256u + ((M2_SPR_TEX_X + tx) >> 2);
     int r;
-    for (r = 0; r < 8; r += 2, T += 256) {
+    for (r = 0; r < 8; r += 2, w += 256) {
         u32 a = ~rows[r], b = ~rows[r + 1];                    /* texel = pen ^ 0xF */
         u32 t = (a & 0xff00ff00u) | ((b >> 8) & 0x00ff00ffu); /* a0a1 b0b1 a4a5 b4b5 */
         u32 u = ((a << 8) & 0xff00ff00u) | (b & 0x00ff00ffu); /* a2a3 b2b3 a6a7 b6b7 */
-        T[0] = (u & 0xffff0000u) | (t >> 16);
-        T[1] = (u << 16) | (t & 0xffffu);
+        m2_tex_wr32(M2_BOARD_TEXRAM0, w,      (u & 0xffff0000u) | (t >> 16));
+        m2_tex_wr32(M2_BOARD_TEXRAM0, w + 1u, (u << 16) | (t & 0xffffu));
     }
 }
 
