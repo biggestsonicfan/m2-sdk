@@ -329,6 +329,9 @@ static void g2d_tquad(float x, float y, float w, float h, u32 uvoff, u32 hdr) {
 static void g2d_ttext_scaled(float x, float y, const char *s, u32 cb, float scale) {
     int i;
     float gw = 8.0f * scale;
+    /* Each glyph is an 11-word UV block plus a 20-word quad; stop at the first one that would
+     * not fit whole (a cut-off TEXDATA block before the END crashes MAME's geo parser). */
+    if (g2d__n + 7 + 11 + 20 + 1 > 0x3000) return;
     /* atlas header: 128x64 (wbits=2,hbits=1), sheet0, transparent(bit13)+textured(bit14) */
     g2d__w(G2D_OP_TEXDATA); g2d__w(G2D_TEXRAM_BIT | G2D_FONT_HDR); g2d__w(4u);
     g2d__w(0x6000u | 2u | (1u << 3));       /* th0: textured + transparent (bg texel 0xf) */
@@ -343,6 +346,7 @@ static void g2d_ttext_scaled(float x, float y, const char *s, u32 cb, float scal
         uv[2] = v0;     uv[3] = u0 + 8;
         uv[4] = v0 + 8; uv[5] = u0 + 8;
         uv[6] = v0 + 8; uv[7] = u0;
+        if (g2d__n + 11 + 20 + 1 > 0x3000) return;
         g2d_tex_uv(G2D_FONT_UV, uv);
         g2d_tquad(x + (float)i * gw, y, gw, gw, G2D_FONT_UV, G2D_FONT_HDR);
     }
