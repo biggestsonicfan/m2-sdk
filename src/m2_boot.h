@@ -30,6 +30,12 @@ static void m2_silicon_boot(void) {
     m2_cop_initialize();     /* arm the COP (wait-ready + write 0)                            */
     geo_initialize();        /* STF GEO init: 4 rotating display-list buffers                */
     geometry_stuff();        /* seed the 5 GEO regions (clip/matrix/microcode) — REQUIRED    */
+#if !M2_BOARD_SHARC
+    /* M2_COP_EXT: each region fill is a 0x1000+-word display list, longer than the 0x1000-word
+     * buffers the VM leaves, so buffer 3's runs over the VM image's mark at word 0x4000 and the
+     * kernel stops running the VM. Put the image back (a no-op without M2_COP_EXT). */
+    m2_cop_ext_upload();
+#endif
 }
 
 #endif /* M2_BOOT_H */

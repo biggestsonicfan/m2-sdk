@@ -457,3 +457,93 @@ exact or close (within 2e-6: cpres1's own sine for 0x80's turn). Two bugs, both 
   `shared`: a 32-bit PM data access to block 1 uses the DM word when IMDW1 is clear. Block 0
   keeps the packed view: it holds the program, IMDW0 makes it a 40-bit block, and cpres1's
   `pm(0x21f18)` writes would land on instruction words in MAME's layout.
+
+
+## Benchmark: `src/vaporbench.c` (every COP command, every board)
+
+A vaporwave scene (sky bands, a striped sun, a scrolling neon grid, a spinning cube with three
+cubes orbiting it, and their shadows) drawn through the COP, with a HUD of what each command
+costs. Every object is one quad: STF's model 456 on 2B, a copy of its 26 words in polygon RAM
+on 2A/2C (MAME's GEO HLE draws that; the real cpres2, `M2_HLE_GEO_OFF`, reads meshes from the
+polygon ROM only). The scene's math is COP commands too: the grid's scroll and the sun's
+stripes use FADD..F2INT, DOT2D and SQRT, the motion SIN..COSSCALE and TAN, the cubes
+ADD3/SUB3/SCALE3, PUSH/POP and RMATRIX, the shadows ATAN2, MAG2D and DIST3D, and the sky
+WMATRIX. The HUD is text the i960 writes into texture RAM (512,0), shown as three
+translucent textured quads; only the characters that changed are rewritten.
+
+Each frame, before it draws, it does two things:
+
+- It checks one native command against the answers `coptest.c` uses, then times 16 calls.
+  Board timer 1 counts down at 25 MHz from 0xFFFFFFFF. A command that answers nothing is
+  timed with one FADD after it, minus a FADD timed alone.
+- It runs one of the 106 other cpres1 commands (`src/vaporbench_cases.h`, the first case of
+  each from `stftest_cases.h`, by `tools/vaporbench_gen.py`). It writes the buffer-RAM words
+  the cases read, presets the matrix, and times the command to its last answer. Then it keeps
+  the answers, any extra words and the matrix in `g_vb_ext_out`.
+
+```sh
+cmake ... -DM2_GAME=vaporbench -DM2_BOARD=2A      # dynamcop; 2C: dynamcopc; 2B (default): sfight
+VB_MAP=build/game.map VB_OUT=out2A.txt mame dynamcop ... -autoboot_script tools/vaporbench_dump.lua
+python3 tools/vaporbench_cmp.py 2A=out2A.txt 2B=out2B.txt 2C=out2C.txt
+```
+
+The table below is in microseconds per call, measured in the shared MAME, so it shows MAME's
+models of the three COPs, not measurements of the hardware. SUBM is SUBMIT inside the scene,
+with its fence, the counts and the END mark. PSPP is a PUSH and a POP.
+
+| command | 2A | 2B | 2C |
+|---|---:|---:|---:|
+| FADD | 1.6 | 1.8 | 1.6 |
+| FSUB | 1.6 | 1.9 | 1.6 |
+| FMUL | 1.6 | 1.9 | 1.6 |
+| FDIV | 2.4 | 2.1 | 2.1 |
+| I2F | 1.5 | 1.8 | 1.6 |
+| F2I | 1.6 | 1.8 | 2.1 |
+| SQRT | 2.3 | 2.5 | 2.4 |
+| SIN | 1.4 | 2.1 | 4.4 |
+| COS | 1.5 | 2.1 | 4.4 |
+| TAN | 2.4 | 2.4 | 4.8 |
+| SINS | 1.7 | 2.2 | 4.5 |
+| COSS | 1.7 | 2.2 | 4.5 |
+| ATN2 | 18.7 | 4.8 | 6.9 |
+| DST2 | 3.5 | 2.8 | 3.1 |
+| DST3 | 4.5 | 3.0 | 3.4 |
+| MAG2 | 2.9 | 2.6 | 2.6 |
+| DOT2 | 2.1 | 2.1 | 1.9 |
+| ADD3 | 2.6 | 2.6 | 2.5 |
+| SUB3 | 2.6 | 2.7 | 2.5 |
+| SCL3 | 2.3 | 2.5 | 2.3 |
+| IDNT | 1.4 | 1.4 | 1.2 |
+| SPOS | 4.5 | 1.7 | 3.0 |
+| SCAL | 2.8 | 1.8 | 2.4 |
+| ANGX | 5.4 | 1.9 | 5.5 |
+| ANGY | 5.4 | 1.9 | 5.5 |
+| ANGZ | 5.4 | 1.9 | 5.5 |
+| RMAT | 5.8 | 6.3 | 6.1 |
+| WMAT | 5.5 | 5.5 | 5.5 |
+| PSPP | 4.5 | 3.2 | 6.9 |
+| SUBM | 10.8 | 6.8 | 11.1 |
+| scene (us) | 3068 | 2563 | 3023 |
+
+The native commands cost about the same on all three boards: most take 1.5-2.5 us. The
+outliers are ATAN2 on 2A (18.7 us), the angle commands on 2A/2C (5.4 us against 1.9 on
+cpres1), and the trig commands on 2C (4.4 us against 1.4 on 2A).
+
+The other commands are where the boards part. cpres1 runs them natively in 1-10 us (the
+afterimage commands 0x3a, 0x80 and 0x81 take 0.2-0.7 ms). The VM interprets m2-hle2's model,
+so they take 0.3-7 ms on 2A and 0.15-3.5 ms on 2C (2C is about 2.2x faster). The extremes
+are 0x81 (clearing the afterimage ring) at 1.0 s on 2A and 0.52 s on 2C, and 0x80 at
+277/137 ms. All 106 run in 1.8 ms on cpres1, 1.85 s on 2A and 0.92 s on 2C. A game that
+needs them on 2A/2C every frame should use few of them, or have the kernels run the hot
+ones natively.
+
+The answers match cpres1's within `stftest_cmp.py`'s tolerance (marked `*` where they
+don't). Only 0x28 and 0x31 differ: these cases have the denormal divide described in the
+`stftest` section.
+
+`m2_silicon_boot` had a bug on 2A/2C with `M2_COP_EXT`. The `geometry_stuff` region fills
+are display lists of 0x1000+ words, longer than the halved buffers. Buffer 3's list ran
+over the VM's mark at buffer RAM word 0x4000, so the kernels stopped running the VM. The
+commands that return nothing seemed to work, and the first one with a result hung.
+`m2_silicon_boot` now uploads the image again at the end. `stftest` never hit the bug
+because it does not call `m2_silicon_boot`.

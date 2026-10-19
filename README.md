@@ -40,7 +40,7 @@ the upper half of buffer RAM, so the GEO display-list buffers are halved. `src/s
 checks every command on all three boards. The
 `m2_obj.h` 3D path runs on 2A and 2C with your own
 object headers (`m2_obj_submit_hdr`); STF's model table is only in `sfight`. Details, the
-address map, `src/coptest.c`, `src/objtest.c`, `src/meshcube.c` (a spinning cube on all three boards), `src/abstest.c` (the 2C TGPx4's absolute address mode) and `src/stftest.c`: [`docs/model2-boards.md`](docs/model2-boards.md).
+address map, `src/coptest.c`, `src/objtest.c`, `src/meshcube.c` (a spinning cube on all three boards), `src/abstest.c` (the 2C TGPx4's absolute address mode), `src/stftest.c` and `src/vaporbench.c` (a vaporwave scene that times every COP command on each board): [`docs/model2-boards.md`](docs/model2-boards.md).
 
 ### Soft-float (DEFAULT — the real i960 has no usable FPU)
 
