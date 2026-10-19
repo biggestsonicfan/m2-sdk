@@ -603,7 +603,9 @@ static void bench_ext(int i) {
 }
 
 /* ======================================================================================== text */
-#if defined(M2_BOARD_2A)
+#if defined(M2_BOARD_2O)
+#define VB_BOARD "MODEL 2  TGP + VM"
+#elif defined(M2_BOARD_2A)
 #define VB_BOARD "MODEL 2A  TGP + VM"
 #elif defined(M2_BOARD_2C)
 #define VB_BOARD "MODEL 2C  TGPX4 + VM"

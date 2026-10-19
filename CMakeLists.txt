@@ -18,17 +18,30 @@ endif()
 
 # Target board (src/m2_board.h). Each one names the program EPROM pair after the MAME set
 # the build replaces: 2B = sfight (Sonic the Fighters), 2A = dynamcop, 2C = dynamcopc
-# (Dynamite Cop, which shipped on all three boards).
-set(M2_BOARD "2B" CACHE STRING "Model 2 board: 2A, 2B or 2C")
-set_property(CACHE M2_BOARD PROPERTY STRINGS 2A 2B 2C)
-if(M2_BOARD STREQUAL "2A")
+# (Dynamite Cop, which shipped on all three boards), 2O = the original Model 2: desert
+# (Desert Tank; complete in this container) or daytona (-DM2_2O_SET=daytona). Its first
+# program pair is 2 x 128 KB, so the image must fit in 256 KB.
+set(M2_BOARD "2B" CACHE STRING "Model 2 board: 2O, 2A, 2B or 2C")
+set_property(CACHE M2_BOARD PROPERTY STRINGS 2O 2A 2B 2C)
+set(M2_ROM_SIZE 0x100000)
+set(M2_2O_SET "desert" CACHE STRING "Original Model 2 set the 2O build replaces: desert or daytona")
+if(M2_BOARD STREQUAL "2O")
+    if(M2_2O_SET STREQUAL "daytona")
+        set(M2_ROM_NAMES epr-16722a.12 epr-16723a.13)
+    elseif(M2_2O_SET STREQUAL "desert")
+        set(M2_ROM_NAMES epr-16976.12 epr-16977.13)
+    else()
+        message(FATAL_ERROR "M2_2O_SET must be desert or daytona (got '${M2_2O_SET}')")
+    endif()
+    set(M2_ROM_SIZE 0x40000)
+elseif(M2_BOARD STREQUAL "2A")
     set(M2_ROM_NAMES epr-20930.12 epr-20931.13)
 elseif(M2_BOARD STREQUAL "2B")
     set(M2_ROM_NAMES epr-19001.15 epr-19002.16)
 elseif(M2_BOARD STREQUAL "2C")
     set(M2_ROM_NAMES epr-20952.15 epr-20953.16)
 else()
-    message(FATAL_ERROR "M2_BOARD must be 2A, 2B or 2C (got '${M2_BOARD}')")
+    message(FATAL_ERROR "M2_BOARD must be 2O, 2A, 2B or 2C (got '${M2_BOARD}')")
 endif()
 
 # i960 startup + IRQ assembly (GNU syntax; assembled -AKB via the gcc driver).
@@ -83,7 +96,7 @@ add_custom_target(rom ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/roms"
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/stfbin2rom.py"
-            --input game.bin --output "${CMAKE_SOURCE_DIR}/roms" --names ${M2_ROM_NAMES}
+            --input game.bin --output "${CMAKE_SOURCE_DIR}/roms" --names ${M2_ROM_NAMES} --size ${M2_ROM_SIZE}
     COMMAND ${CMAKE_COMMAND} -E echo
             "BUILD OK (${M2_GAME}, Model ${M2_BOARD}):  roms/${M2_ROM_NAMES}"
     DEPENDS game.elf

@@ -1,7 +1,7 @@
-# Model 2A, 2B and 2C
+# Model 2, 2A, 2B and 2C
 
 The SDK was written for Model 2B (the `sfight` set). It also builds for the 2A and 2C
-boards:
+boards, and for the original Model 2:
 
 ```sh
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_BOARD=2A -DM2_GAME=fontdemo
@@ -12,6 +12,7 @@ cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_BOARD=2A -DM
 | `2A` | Model 2A-CRX | TGP (Fujitsu MB86234) | `epr-20930.12` + `epr-20931.13` | `dynamcop` |
 | `2B` (default) | Model 2B-CRX | SHARC ADSP-21062 COP + SHARC GEO | `epr-19001.15` + `epr-19002.16` | `sfight` |
 | `2C` | Model 2C-CRX | TGPx4 (Fujitsu MB86235) | `epr-20952.15` + `epr-20953.16` | `dynamcopc` |
+| `2O` | Model 2 (original) | TGP (Fujitsu MB86234) | `epr-16976.12` + `epr-16977.13` (`daytona`: `epr-16722a.12` + `epr-16723a.13`) | `desert` (`-DM2_2O_SET=daytona`: `daytona`) |
 
 ## Where the boards differ
 
@@ -32,6 +33,56 @@ the same addresses.
 `m2_luma_wr` (`m2_color.h`) hide the 2A bus layout. Only STF's data ROM has the luma
 table, so on 2A and 2C the SDK builds STF's polygon luma curve instead
 (`M2_LUMA_STF_CURVE`).
+
+## The original Model 2 (`2O`)
+
+MAME runs Daytona USA, Desert Tank and Virtua Cop on `model2o_state`. The
+i960 side is a 2A: the same `model2_tgp_state`, so the same TGP and program upload
+(the SDK's TGP program and `M2_COP_EXT` run unchanged). It also has 2A's texture and luma map at
+0x12000000 and render mode 4 (DaytonaTestRom `main.c` writes 0x04). `model2o_mem`
+differs in three places:
+
+| What | Model 2 | 2A |
+|---|---|---|
+| Program ROM | 2 x 128 KB at 0 (`ROM_LOAD32_WORD`): a 256 KB image | 2 x 512 KB |
+| 0x200000 | 128 KB RAM; 0x220000 maps program ROM +0x20000 | 256 KB RAM |
+| 0x01C00000 | MB8421 dual-port RAM to the Model 1 IO board (`umask32 0x00ff00ff`: dpram byte n at 0x01C00000 + 2n) | 315-5649 |
+
+- **ROM size.** The build pads the image to 256 KB. With `--size`,
+  `tools/stfbin2rom.py` fails on a bigger image instead of truncating it. The examples are far
+  below the limit: vaporbench is 78 KB, meshcube_ext 58 KB and coptest 39 KB.
+- **RAM.** The boot copies 128 KB to 0x200000, and work RAM is at 0x500000 as on the other
+  boards, so the boot and the linker script need no change.
+- **Inputs.** The IO board's Z80 (`epr-14869c`) leaves the dpram alone until the main CPU
+  writes "SEGA" to dpram bytes 0x1A-0x1D and 1 to byte 0x20. `m2_init` does this
+  (`m2_io_model1_init`). After that the Z80 writes the eight ADC channels (wheel, pedals) to
+  bytes 0-7 and IN0/IN1/IN2 to bytes 8/9/10. `m2_io_in(n)` reads them, so
+  `m2_input`, `m2_start` and `m2_player` work on every board. IN0 has 2B's bit layout
+  (coin, test, service, start). Daytona and Desert Tank wire IN1 to their own buttons
+  (gear shift, guns), not a stick. STF still writes the same "SEGA" sequence on 2B,
+  where nothing reads it.
+
+All of this, the memory map and the IO handshake, comes from
+[DaytonaTestRom](https://github.com/stevej0/DaytonaTestRom) (Steve Jones, MIT, `main.h`,
+`main.c` `initIO`/`readIO`), checked against MAME `model2o_mem` and `ROM_START(desert)`.
+
+The test set is `desert`, the only complete `model2o` set here. The `daytona` sets lack the
+IO board's `epr-16488a.ic12` and the drive board's `epr-16726.bin`, and `vcop` lacks the
+`hd44780` ROM. `-DM2_2O_SET=daytona` names the ROMs for `daytona`. Results on `desert` in the shared MAME:
+
+| Program | Result |
+|---|---|
+| `coptest` | ALL COMMANDS OK |
+| `meshcube` | the spinning cube |
+| `meshcube_ext` | VM mark `M2VM` at word 0x4000, cmd 0x19 = 0.25: PASS (`tools/copext_check.lua`) |
+| `vaporbench` | 30/30 natives, 106/106 ext, scene 3065 us; every ext answer is the same as 2A's, every native time within 0.2 us of it |
+| `inputtest` | START1 held: IN0 bit 4 clears, `m2_start` = 1, `m2_input(0)` has `M2_START` (`tools/inputtest_check.lua`) |
+
+`inputtest` also shows `M2_START` on P2 (`m2_input(1)`) while only START1 is held, on 2A
+and 2B as well. The cause is a compiler bug, not the inputs. In `m2_input`, i960-elf GCC 11.5
+puts `cmpi g6,0` (player == 0?) before `bbs 5,g4` and branches on that compare after it. On the
+i960, `bbs`/`bbc` set the condition code (MAME `i960.cpp`, op 0x37), so the branch tests
+the `bbs` result instead.
 
 ## The 2A coprocessor: the SDK's TGP program
 
@@ -535,6 +586,10 @@ scene time is from another frame. The grid, the cubes, the orbiters,
 their shadows, the sun and the HUD all draw under the real GEO. About 3-4% of the pixels
 differ from the HLE frame, all of them along polygon edges, where the two renderers
 rasterize slightly differently.
+
+The original Model 2 (`2O`, on `desert`) gives the same numbers as 2A, because it has the
+same TGP in MAME. Each native time is within 0.2 us of 2A's, all 106 ext answers are the same,
+and the scene takes 3065 us.
 
 The native commands cost about the same on all three boards: most take 1.5-2.5 us. The
 outliers are ATAN2 on 2A (18.7 us), the angle commands on 2A/2C (5.4 us against 1.9 on

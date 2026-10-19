@@ -28,9 +28,11 @@ see the result.
 
 ## Other boards
 
-`-DM2_BOARD=2A|2C` builds for Model 2A (`dynamcop`) / 2C (`dynamcopc`); default 2B.
+`-DM2_BOARD=2A|2C|2O` builds for Model 2A (`dynamcop`) / 2C (`dynamcopc`); default 2B.
 2A's COP runs the SDK's TGP program `src/m2_tgp_kernel.s` (edit the `.s`, regenerate the
-`.h` with `tools/tgpasm.py`); 2C has no COP program. See `docs/model2-boards.md`.
+`.h` with `tools/tgpasm.py`); 2C has no COP program. `-DM2_BOARD=2O` is the original
+Model 2 (`desert`; `daytona` with `-DM2_2O_SET=daytona`): 2A's TGP, a 256 KB program ROM,
+inputs through the Model 1 IO board. See `docs/model2-boards.md`.
 
 ## Which render path? (read this first)
 
