@@ -547,3 +547,12 @@ over the VM's mark at buffer RAM word 0x4000, so the kernels stopped running the
 commands that return nothing seemed to work, and the first one with a result hung.
 `m2_silicon_boot` now uploads the image again at the end. `stftest` never hit the bug
 because it does not call `m2_silicon_boot`.
+
+`src/meshcube_ext.c` guards against this coming back. It is `meshcube.c` built with
+`M2_COP_EXT`. After `m2_silicon_boot` it checks for the mark at word 0x4000, then sends VM
+command 0x19 (1/sqrt(16)). It waits for the answer only for a limited time, so the check
+fails instead of hanging. If the check fails, the cube is drawn all red.
+`tools/copext_check.lua` (`-autoboot_script`, with `CE_MAP` = the build's `game.map` and
+`CE_OUT` = output file) writes `PASS` or `FAIL` and quits. The canaries
+`model2/m2-sdk-2a-copext` and `-2c-copext` run this build. Their builds from before the
+fix read 0 at word 0x4000.
