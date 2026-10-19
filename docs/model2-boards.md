@@ -491,39 +491,50 @@ The table below is in microseconds per call, measured in the shared MAME, so it 
 models of the three COPs, not measurements of the hardware. SUBM is SUBMIT inside the scene,
 with its fence, the counts and the END mark. PSPP is a PUSH and a POP.
 
-| command | 2A | 2B | 2C |
-|---|---:|---:|---:|
-| FADD | 1.6 | 1.8 | 1.6 |
-| FSUB | 1.6 | 1.9 | 1.6 |
-| FMUL | 1.6 | 1.9 | 1.6 |
-| FDIV | 2.4 | 2.1 | 2.1 |
-| I2F | 1.5 | 1.8 | 1.6 |
-| F2I | 1.6 | 1.8 | 2.1 |
-| SQRT | 2.3 | 2.5 | 2.4 |
-| SIN | 1.4 | 2.1 | 4.4 |
-| COS | 1.5 | 2.1 | 4.4 |
-| TAN | 2.4 | 2.4 | 4.8 |
-| SINS | 1.7 | 2.2 | 4.5 |
-| COSS | 1.7 | 2.2 | 4.5 |
-| ATN2 | 18.7 | 4.8 | 6.9 |
-| DST2 | 3.5 | 2.8 | 3.1 |
-| DST3 | 4.5 | 3.0 | 3.4 |
-| MAG2 | 2.9 | 2.6 | 2.6 |
-| DOT2 | 2.1 | 2.1 | 1.9 |
-| ADD3 | 2.6 | 2.6 | 2.5 |
-| SUB3 | 2.6 | 2.7 | 2.5 |
-| SCL3 | 2.3 | 2.5 | 2.3 |
-| IDNT | 1.4 | 1.4 | 1.2 |
-| SPOS | 4.5 | 1.7 | 3.0 |
-| SCAL | 2.8 | 1.8 | 2.4 |
-| ANGX | 5.4 | 1.9 | 5.5 |
-| ANGY | 5.4 | 1.9 | 5.5 |
-| ANGZ | 5.4 | 1.9 | 5.5 |
-| RMAT | 5.8 | 6.3 | 6.1 |
-| WMAT | 5.5 | 5.5 | 5.5 |
-| PSPP | 4.5 | 3.2 | 6.9 |
-| SUBM | 10.8 | 6.8 | 11.1 |
-| scene (us) | 3068 | 2563 | 3023 |
+| command | 2A | 2B | 2B real GEO | 2C |
+|---|---:|---:|---:|---:|
+| FADD | 1.6 | 1.8 | 1.8 | 1.6 |
+| FSUB | 1.6 | 1.9 | 1.9 | 1.6 |
+| FMUL | 1.6 | 1.9 | 1.9 | 1.6 |
+| FDIV | 2.4 | 2.1 | 2.1 | 2.1 |
+| I2F | 1.5 | 1.8 | 1.8 | 1.6 |
+| F2I | 1.6 | 1.8 | 1.8 | 2.1 |
+| SQRT | 2.3 | 2.5 | 2.4 | 2.4 |
+| SIN | 1.4 | 2.1 | 2.1 | 4.4 |
+| COS | 1.5 | 2.1 | 2.1 | 4.4 |
+| TAN | 2.4 | 2.4 | 2.4 | 4.8 |
+| SINS | 1.7 | 2.2 | 2.2 | 4.5 |
+| COSS | 1.7 | 2.2 | 2.2 | 4.5 |
+| ATN2 | 18.7 | 4.8 | 4.9 | 6.9 |
+| DST2 | 3.5 | 2.8 | 2.8 | 3.1 |
+| DST3 | 4.5 | 3.0 | 3.0 | 3.4 |
+| MAG2 | 2.9 | 2.6 | 2.6 | 2.6 |
+| DOT2 | 2.1 | 2.1 | 2.1 | 1.9 |
+| ADD3 | 2.6 | 2.6 | 2.6 | 2.5 |
+| SUB3 | 2.6 | 2.7 | 2.7 | 2.5 |
+| SCL3 | 2.3 | 2.5 | 2.5 | 2.3 |
+| IDNT | 1.4 | 1.4 | 1.4 | 1.2 |
+| SPOS | 4.5 | 1.7 | 1.7 | 3.0 |
+| SCAL | 2.8 | 1.8 | 1.8 | 2.4 |
+| ANGX | 5.4 | 1.9 | 1.9 | 5.5 |
+| ANGY | 5.4 | 1.9 | 1.9 | 5.5 |
+| ANGZ | 5.4 | 1.9 | 1.9 | 5.5 |
+| RMAT | 5.8 | 6.3 | 6.3 | 6.1 |
+| WMAT | 5.5 | 5.5 | 5.5 | 5.5 |
+| PSPP | 4.5 | 3.2 | 3.2 | 6.9 |
+| SUBM | 10.8 | 6.8 | 6.8 | 11.1 |
+| scene (us) | 3068 | 2563 | 2618 | 3023 |
+
+The "2B real GEO" column is the same 2B build run for 600 frames with `M2_HLE_GEO_OFF=1`,
+so the real cpres2 SHARC draws the display lists instead of MAME's HLE. All 30 native
+commands give the right answers there as well. Run against an HLE run of the same length,
+every native time, every ext-command answer and the scene time (2618 us at frame 568) came
+out exactly the same, because the GEO does not affect the i960 or cpres1 timing in MAME.
+The "2B" column is from an earlier run. SQRT and ATAN2 differ from it by 0.1 us, and its
+scene time is from another frame. The grid, the cubes, the orbiters,
+their shadows, the sun and the HUD all draw under the real GEO. About 3-4% of the pixels
+differ from the HLE frame, all of them along polygon edges, where the two renderers
+rasterize slightly differently.
 
 The native commands cost about the same on all three boards: most take 1.5-2.5 us. The
 outliers are ATAN2 on 2A (18.7 us), the angle commands on 2A/2C (5.4 us against 1.9 on
