@@ -1,9 +1,10 @@
-# m2-sdk — Sega Model 2B (i960KB) homebrew SDK
+# m2-sdk — Sega Model 2 (i960KB) homebrew SDK
 
-A small, header-only SDK for writing homebrew that runs on the **Sega Model 2B**
-board (Intel **i960KB** main CPU), built into the program ROM pair
-`roms/epr-19001.15` + `roms/epr-19002.16`. It runs in MAME on the `sfight`
-(Sonic the Fighters) romset by overriding just those two program EPROMs.
+A small, header-only SDK for writing homebrew that runs on the **Sega Model 2** boards
+(Intel **i960KB** main CPU): the original Model 2, 2A, 2B and 2C. You build one `.c`
+into the board's program ROM pair, and MAME runs it on a game set that board shipped
+in, by overriding just those two program EPROMs. The default board is **2B**
+(`roms/epr-19001.15` + `roms/epr-19002.16`, run on `sfight`, Sonic the Fighters).
 
 > **AI disclosure:** essentially all source in this repo was written by Claude (Anthropic)
 > under human direction; the hardware facts behind it came from ROM disassembly, MAME
@@ -12,43 +13,64 @@ board (Intel **i960KB** main CPU), built into the program ROM pair
 
 ## Quick start
 
-**First, one prerequisite:** the SDK ships **no Sega ROM data**. Before a coprocessor
-build will compile you must extract `src/cpres1.h` + `src/cpres2.h` from your own ROM
-dump — see [`docs/firmware-extraction.md`](docs/firmware-extraction.md). Those headers
-are git-ignored; the build stops with a pointer to that doc if they are missing.
+**One prerequisite on 2B:** the SDK ships **no Sega ROM data**. A 2B coprocessor build
+loads STF's SHARC firmware, so you must first extract `src/cpres1.h` + `src/cpres2.h`
+from your own ROM dump — see [`docs/firmware-extraction.md`](docs/firmware-extraction.md).
+Those headers are git-ignored; the build stops with a pointer to that doc if they are
+missing. The other boards need no firmware: their coprocessor runs the SDK's own program.
 
 ```sh
 # msys2 clang64 i960-elf toolchain + cmake/ninja must be on PATH (see "Toolchain")
 cmake -G Ninja -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake
 ninja -C build
-# -> roms/epr-19001.15  roms/epr-19002.16   (the bundled src/demo.c)
+# -> roms/epr-19001.15  roms/epr-19002.16   (the bundled src/demo.c, Model 2B)
 ```
 
 Build a different program with `-DM2_GAME=<name>` (compiles `src/<name>.c`).
 Drop your own `.c` in `src/` and reconfigure. Or use the equivalent batch script:
 `cmd /c ".\build_clang64.bat demo"`.
 
-### Model 2A, 2C and the original Model 2
+### Boards: `-DM2_BOARD`
 
-`-DM2_BOARD=2A` or `2C` builds for the other Model 2 boards (default `2B`). 2A runs on
-`dynamcop`, 2C on `dynamcopc`. On 2A the COP runs the SDK's own TGP program
-(`src/m2_tgp_kernel.s`: the cpres1 math and matrix commands, PUSH/POP
-and SUBMIT); on 2C its TGPx4 program (`src/m2_tgpx4_kernel.s`, same commands).
-`#define M2_COP_EXT` adds every other cpres1 command on both: the kernels run them in a
-VM, from m2-hle2's cpres1 model compiled for RISC-V (`src/cop_ext/`). The VM program takes
-the upper half of buffer RAM, so the GEO display-list buffers are halved. `src/stftest.c`
-checks every command on all three boards. The
-`m2_obj.h` 3D path runs on 2A and 2C with your own
-object headers (`m2_obj_submit_hdr`); STF's model table is only in `sfight`. Details, the
-address map, `src/coptest.c`, `src/objtest.c`, `src/meshcube.c` (a spinning cube on all three boards), `src/abstest.c` (the 2C TGPx4's absolute address mode), `src/stftest.c` and `src/vaporbench.c` (a vaporwave scene that times every COP command on each board): [`docs/model2-boards.md`](docs/model2-boards.md).
+| `-DM2_BOARD` | Board | Coprocessor (COP) | ROM pair written | Run on |
+|---|---|---|---|---|
+| `2O` | Model 2 (original) | TGP (MB86234): the SDK's TGP program | `epr-16976.12` + `epr-16977.13` | `desert` (`-DM2_2O_SET=daytona`: `daytona`) |
+| `2A` | Model 2A-CRX | TGP (MB86234): the SDK's TGP program | `epr-20930.12` + `epr-20931.13` | `dynamcop` |
+| `2B` (default) | Model 2B-CRX | SHARC ADSP-21062: STF's cpres1 (COP) + cpres2 (GEO) | `epr-19001.15` + `epr-19002.16` | `sfight` |
+| `2C` | Model 2C-CRX | TGPx4 (MB86235): the SDK's TGPx4 program | `epr-20952.15` + `epr-20953.16` | `dynamcopc` |
 
-`-DM2_BOARD=2O` builds for the original Model 2 (MAME `model2o`). It runs on `desert`
-(Desert Tank), or on `daytona` with `-DM2_2O_SET=daytona`. It is a 2A with the same TGP,
-so the TGP program and `M2_COP_EXT` work unchanged. Its program ROM is 256 KB, and the build
-fails if the image is bigger. Its inputs come from the Model 1 IO board, which `m2_init`
-starts and `m2_input` reads. `src/inputtest.c` shows them on any board. The memory map
-and the IO handshake come from [DaytonaTestRom](https://github.com/stevej0/DaytonaTestRom)
-(Steve Jones, MIT).
+**The STF coprocessor on every board.** The SDK's COP API (`m2_math.h`, `m2_3d.h`,
+`m2_obj.h`) speaks Sonic the Fighters' cpres1 command set. On 2B that is cpres1 itself.
+On 2O/2A the SDK uploads its own TGP program (`src/m2_tgp_kernel.s`) and on 2C its own
+TGPx4 program (`src/m2_tgpx4_kernel.s`); both answer the same commands, so one program
+builds for all four boards:
+
+- **Native** in both kernels: the scalar math (FADD..F2INT, SQRT, SIN/COS/TAN, ATAN2), the
+  vector ops, the matrix commands (IDENTITY, SET_POS, SCALE, ANG_*, RMATRIX, PUSH/POP) and
+  SUBMIT (0x78), which drives the 3D path. `src/coptest.c` checks them per command.
+- **Everything else** with `#define M2_COP_EXT` (before the SDK headers): every other
+  cpres1 command 0x00-0x87, afterimages included, runs in a small VM inside the kernel —
+  m2-hle2's cpres1 model compiled for RISC-V (`src/cop_ext/`, checked in as
+  `src/m2_cop_ext_image.h`). The VM program takes the upper half of buffer RAM, so the
+  GEO display-list buffers are halved. It gives cpres1's answers but is interpreted: a VM
+  command takes 0.3-7 ms on 2A in MAME (0x81, clearing the afterimage ring, 1 s; 2C is
+  about 2.2x faster), so keep them out of per-object loops. Without the define the kernels
+  ignore those commands and read their arguments as commands. On 2B it changes nothing. `src/stftest.c` runs 1152 cases (every
+  command, then an afterimage sequence) on 2A, 2B and 2C and compares the answers; only
+  denormal/zero-divisor words differ.
+
+The `m2_obj.h` 3D path runs on every board; off 2B use your own object headers
+(`m2_obj_submit_hdr`), because STF's model table and polygon palette are only in
+`sfight`'s data ROM. 2O's program ROM is 256 KB (the build fails if the image is bigger),
+and its inputs come from the Model 1 IO board, which `m2_init` starts and `m2_input` reads
+(`src/inputtest.c` shows them on any board). The 2O memory map and IO handshake come from
+[DaytonaTestRom](https://github.com/stevej0/DaytonaTestRom) (Steve Jones, MIT).
+
+Details — the address map, the kernels' commands, the VM, and the tests
+`src/coptest.c`, `src/objtest.c`, `src/meshcube.c` (a spinning cube on every board),
+`src/abstest.c` (the 2C TGPx4's absolute address mode), `src/stftest.c` and
+`src/vaporbench.c` (a vaporwave scene that times every COP command on each board, with
+the results): [`docs/model2-boards.md`](docs/model2-boards.md).
 
 ### Soft-float (DEFAULT — the real i960 has no usable FPU)
 
@@ -74,12 +96,13 @@ that drives the **real GEO** — `m2_obj.h` object_data (see `src/hwdemo.c`) —
 MAME-HLE g2d `direct_data` path. (`src/demo.c`/`fontdemo.c` use g2d, so they stay
 MAME-only regardless of float mode.)
 
-### Real SHARC/GEO vs MAME HLE
+### Real SHARC/GEO vs MAME HLE (2B)
 
-The SDK boots the **real SHARC/GEO geometrizer**. Run MAME with **`M2_HLE_GEO_OFF`**
+On 2B the SDK boots the **real SHARC/GEO geometrizer**. Run MAME with **`M2_HLE_GEO_OFF`**
 set in the environment to exercise the real geometry program rather than MAME's
-HLE'd `geo_parse`. g2d's buffered `direct_data` (`m2_gfx2d.h`) renders **nothing**
-with HLE off. Two paths DO render on the real GEO:
+HLE'd `geo_parse`. (2O/2A/2C have no SHARC GEO: MAME always draws them with its HLE,
+and `M2_HLE_GEO_OFF` does nothing there.) g2d's buffered `direct_data` (`m2_gfx2d.h`)
+renders **nothing** with HLE off. Two paths DO render on the real GEO:
 
 - **3D model-table objects → `m2_obj.h`** (the COP-bridge path; m2-snake's ice-cube
   sandbox). One-call boot **`m2_silicon_boot()`**, then per frame: `m2_frame_begin()`
@@ -147,7 +170,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_memory.h` | STF work-RAM control globals as one struct (`M2_MEM`): the vsync counter, timer flag, and the GEO display-list buffer block. `M2_MEM.vsync`/`timer_flag` alias the boot/IRQ asm's `_RAMBASE_START`/`_timerFlag` linker symbols (same RAM). |
 | `m2_gfx2d.h` | **Hardware-2D / vector graphics** via the GEO `direct_data` path (no coprocessor). Flat-colour `rect`/`circle`/`line`/`quad`/`tri` (2D, painter's order) **and** real-Z depth-sorted 3D primitives (`g2d_vquad`/`g2d_vline`/`g2d_vtri`, `g2d_luma` shading, `g2d_zsort_fine`). |
 | `m2_color.h` | 3D colour pipeline (`m2_color_init` = colorxlat + LUMA2 ramp; `m2_load_poly_palette` = STF 1024 colorbase colours). Needed by `m2_gfx2d.h` and the silicon object_data path. |
-| `m2_3d.h` | Coprocessor (COP/SHARC) bring-up + camera + object-submit. Pulls in the `cpres1/2` firmware + `m2_math.h`. Only needed for COP-backed 3D. |
+| `m2_3d.h` | Coprocessor bring-up (`m2_cop_boot`: STF's SHARC firmware on 2B, the SDK's kernel on 2O/2A/2C, plus the VM with `M2_COP_EXT`) + camera + object-submit. Pulls in `m2_math.h`, and on 2B the `cpres1/2` firmware. Only needed for COP-backed 3D. |
 | `m2_geo.h` | Descriptive GEO display-list builder (object_data for real-hardware-portable geometry; direct_data primitives). Includes `geo_initialize`/`geometry_stuff` — the real-silicon GEO boot/frame model. |
 | `m2_text.h` | **Silicon-capable** text: COP model-456 glyphs (`m2_draw_text`, world coords) + `m2_text_screen` (pixel coords). gFont → 128×64 texram0 atlas. |
 | `m2_draw.h` | 2D filled shapes via the DIRECT-FIFO path: `m2_fill_rect`/`fill_ellipse`/`fill_circle` (+ `_o` outlines), `m2_draw_text_px`. Pixel-coord, multi-colour, z-layered. Per frame: `m2_frame_begin` → **`m2_draw_frame_setup`** (render-state ONCE/frame) → draws → `m2_frame_commit`. MAME-proven (`M2_HLE_GEO_OFF`). |
@@ -158,10 +181,12 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
 | `m2_io.h` | The 315-5649 on-board I/O chip as one struct (`M2_IO`): input bank + player ports (raw `M2_IN0_*`/`M2_INP_*` masks + decoded `m2_player_t`/`m2_player`) and the RS-422 link registers. Pulled in by `m2.h`. |
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport (uses `M2_IO`). |
-| `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
+| `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; the same calls work on every board. `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
 | `m2_board.h` | Which board (`M2_BOARD_2O`/`2A`/`2B`/`2C`) and the addresses that differ. Included by `m2_constants.h`. |
-| `m2_tgp_kernel.s` / `.h` | The SDK's Model 2A COP program (TGP) and its generated header; `m2_cop_boot` uploads it on 2A. |
+| `m2_tgp_kernel.s` / `.h` | The SDK's TGP COP program (2O/2A) and its generated header (`tools/tgpasm.py`); `m2_cop_boot` uploads it. |
+| `m2_tgpx4_kernel.s` / `.h` | The SDK's TGPx4 COP program (2C) and its generated header (`tools/tgpx4asm.py`). |
+| `m2_cop_ext_image.h` | The `M2_COP_EXT` VM program: m2-hle2's cpres1 model, built from `src/cop_ext/` (`build.sh`, clang RV32IF → `tools/rv2cvm.py`). Checked in; rebuild only after changing `src/cop_ext/`. |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
 `i_table.s`, `i_handle.s` (assembled automatically by the build).
@@ -201,7 +226,12 @@ condition code: see [`docs/i960-gcc-bbs-bug.md`](docs/i960-gcc-bbs-bug.md).
 src/      SDK headers (m2*.h) + i960 boot/IRQ asm (*.s) + your game .c
           (+ your extracted cpres*.h firmware blobs — git-ignored)
 lib/      testlinkrom_elf.ld   (GNU ld script: ROM@0, RAM@0x500000, cs1 checksum)
-tools/    stfbin2rom.py (split the ROM image), bin2c.py, tgpasm.py (TGP assembler)
+src/cop_ext/  the M2_COP_EXT VM program's source (C + RISC-V, built by build.sh)
+docs/     model2-boards.md (2O/2A/2B/2C, COP kernels, VM, tests, timings),
+          firmware-extraction.md, rs422-serial-protocol.md, i960-gcc-bbs-bug.md
+tools/    stfbin2rom.py (split the ROM image), bin2c.py, tgpasm.py / tgpx4asm.py (TGP /
+          TGPx4 assemblers), rv2cvm.py + cvm.py (VM translator + host VM), and the
+          test/benchmark scripts (*_dump.lua for MAME, *_cmp.py to compare boards)
 CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 ```
 
@@ -209,6 +239,11 @@ CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 
 - 8×8 bitmap font (`src/m2font.h`): Steve J's Daytona USA Test ROM project —
   https://github.com/stevej0/DaytonaTestRom
+- Original Model 2 (2O) memory map and Model 1 IO board handshake: DaytonaTestRom
+  (Steve Jones, MIT), as above.
+- The `M2_COP_EXT` VM program (`src/cop_ext/`) is
+  [m2-hle2](https://github.com/biggestsonicfan/m2-hle2)'s C model of cpres1's commands
+  (each `.inc` names the m2-hle2 commit and file it came from), compiled for the SDK's VM.
 - i960 reset/startup asm (`src/kx_init.s`, `src/kx_ftbl.s`): Intel Corporation, 1989 —
   redistributed under the permission notice at the top of those files.
 - **No Sega ROM data ships with this SDK.** The coprocessor firmware and palette blobs
@@ -225,7 +260,9 @@ CMakeLists.txt, toolchain-i960-elf.cmake, build_clang64.bat
 
 ## Status
 
-Experimental homebrew reverse-engineering work, not a validated product. There is no test
-suite; "correct" here means someone watched it run in MAME, on m2emulator, or on a real
-Model 2B. Comments may be stale or over-confident — corrections of the form "this comment
+Experimental homebrew reverse-engineering work, not a validated product. There is no
+automated test suite; "correct" here means someone watched it run in MAME, on m2emulator,
+or on a real Model 2B. The COP checks (`coptest`, `objtest`, `stftest`) run in MAME and
+compare the boards with each other and with cpres1. The 2O, 2A and 2C builds have only
+run in MAME, never on those boards. Comments may be stale or over-confident — corrections of the form "this comment
 claims X, the board actually does Y" are the most valuable contribution you can make.
