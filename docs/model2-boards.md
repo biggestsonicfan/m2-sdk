@@ -79,10 +79,8 @@ IO board's `epr-16488a.ic12` and the drive board's `epr-16726.bin`, and `vcop` l
 | `inputtest` | START1 held: IN0 bit 4 clears, `m2_start` = 1, `m2_input(0)` has `M2_START` (`tools/inputtest_check.lua`) |
 
 `inputtest` also shows `M2_START` on P2 (`m2_input(1)`) while only START1 is held, on 2A
-and 2B as well. The cause is a compiler bug, not the inputs. In `m2_input`, i960-elf GCC 11.5
-puts `cmpi g6,0` (player == 0?) before `bbs 5,g4` and branches on that compare after it. On the
-i960, `bbs`/`bbc` set the condition code (MAME `i960.cpp`, op 0x37), so the branch tests
-the `bbs` result instead.
+and 2B as well. The inputs are fine; this is a compiler bug. See
+[`i960-gcc-bbs-bug.md`](i960-gcc-bbs-bug.md).
 
 ## The 2A coprocessor: the SDK's TGP program
 

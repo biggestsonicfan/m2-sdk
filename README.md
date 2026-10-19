@@ -192,6 +192,9 @@ i.e. `C:\msys64\clang64\bin`. That directory **must be on `PATH`** — otherwise
 (baked into `toolchain-i960-elf.cmake`): `-mkb` (i960KB), `-ffreestanding`
 (no libc), `-fleading-underscore` (match the boot asm's `_main`/`_frameVBL`/…).
 
+GCC 11.5 at `-O2` can branch on a stale compare after `bbs`/`bbc`, which set the
+condition code: see [`docs/i960-gcc-bbs-bug.md`](docs/i960-gcc-bbs-bug.md).
+
 ## Layout
 
 ```
