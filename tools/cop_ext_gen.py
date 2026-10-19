@@ -40,3 +40,51 @@ for rep in range(3):
         mat()
         gen = typed.get(n, (arg,) * counts[n])
         print("%02x " % n + " ".join("%08x" % g() for g in gen))
+
+# The afterimage engine (0x80..0x87, cpres1 PM 0x208E1..0x20A8E) as STF drives it: 0x80 lays
+# a fighter's trail into the 128-slot ring, so the readers above only ever saw an empty one.
+# Each frame: move some parts' unit matrices (0x35), reserve (0x80: 4 header words, then per
+# part its index and three object numbers, then -1 and a turn angle), snapshot this frame as
+# the next one's previous (0x7F), age the ring (0x82) and read it back (0x83..0x87).
+u = lambda v: v & 0xffffffff
+units = [[None] * 16 for _ in range(2)]
+def put_unit(p, b, m):
+    units[p][b] = m
+    print("mat " + " ".join("%08x" % fb(x) for x in m))
+    print("35 %08x %08x" % (p, 12 * b))
+print("81")
+print("49 %08x %08x" % (0x32181, fb(0.1)))        # spacing: one copy per 0.1 units
+print("49 %08x %08x" % (0x32182, 30))             # the life a fresh trail starts at
+for p in range(2):
+    for b in range(16):
+        put_unit(p, b, [random.uniform(-1, 1) for _ in range(9)] + [random.uniform(-5, 5) for _ in range(3)])
+    print("7f %08x" % p)
+written = 0
+for f in range(8):
+    for p in range(2):
+        npart = random.choice((1, 2, 3, 5, 8, 11, 16))
+        mask = sum(1 << b for b in random.sample(range(16), npart))
+        far = f == 5 and p == 0                   # one teleport: farther than 13 squared, no trail
+        for b in range(16):
+            if mask >> b & 1:
+                m = units[p][b]
+                put_unit(p, b, [x + random.uniform(-0.05, 0.05) for x in m[:9]] +
+                         [x + (6.0 if far else random.uniform(-0.4, 0.4)) for x in m[9:]])
+        step = -random.randrange(1, 5)
+        ang = random.choice((0, random.randrange(1, 0x10000)))
+        recs = []
+        for b in reversed(range(16)):              # the i960 scanbits, highest part first
+            if mask >> b & 1: recs += [b, random.randrange(1, 0x400), random.randrange(1, 0x400), random.randrange(1, 0x400)]
+        print("80 " + " ".join("%08x" % u(w) for w in [p, mask, u(step), fb(random.uniform(0.2, 1.0))] + recs + [0xffffffff, ang]))
+        print("7f %08x" % p)
+    print("82")
+    for s in random.sample(range(0x80), 6):
+        print("85 %08x" % s)
+    print("83 %08x" % random.randrange(0x80))
+    print("84 %08x" % random.randrange(0x80))
+    if f % 3 == 2:
+        print("87 %08x" % random.randrange(0x80))
+    if f == 6:
+        print("86 %08x" % random.randrange(2))
+for s in range(0x80):                              # the whole ring at the end
+    print("85 %08x" % s)

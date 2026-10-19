@@ -3,7 +3,8 @@
  *
  * On 2A and 2C the COP kernels run the commands they have no native code for in their VM
  * (M2_COP_EXT, src/cop_ext/). This sends the cases in stftest_cases.h (tools/cop_ext_gen.py:
- * a matrix, then each command with random arguments, three times over) through the COP FIFO,
+ * a matrix, then each command with random arguments, three times over, then the afterimage
+ * commands 0x80-0x87 on a ring 0x80 fills, frame by frame) through the COP FIFO,
  * reads each one's results and then the matrix (RMATRIX), and keeps them all in g_stf_out[]:
  * per case the number of words, then the words: its results, then 12 matrix words (a command
  * that answers with more words than the model shows them all). g_stf_done counts the cases
@@ -39,9 +40,25 @@ int main(void) {
     c = stf_cases;
     for (k = 0; k < STF_NCASES; k++) {
         u32 n = c[0], na = c[1], nr = c[2];
+        const u32 *a = c + 3;
         m2_cop(COP_CMD(n));
-        for (i = 0; i < na; i++) m2_cop_pi(c[3 + i]);
-        for (i = 0; i < nr; i++) g_stf_out[o + 1 + i] = M2_COPFIFO;
+        if (n == 0x80) {
+            /* Fn_zanzou_reserve streams, as STF's zanzou_control (i960 0x8AB10) drives it: the
+               4 header words, then per part 4 words and its answer, then -1, the angle and the
+               last answer. Sending it all first could fill the COP's output FIFO (8 words on
+               2A/2C, MAME model2.cpp) and stall both sides. */
+            u32 j;
+            for (j = 0; j < 4; j++) m2_cop_pi(a[j]);
+            for (i = 0; a[j] != 0xffffffffu; i++, j += 4) {
+                m2_cop_pi(a[j]); m2_cop_pi(a[j + 1]); m2_cop_pi(a[j + 2]); m2_cop_pi(a[j + 3]);
+                g_stf_out[o + 1 + i] = M2_COPFIFO;
+            }
+            m2_cop_pi(a[j]); m2_cop_pi(a[j + 1]);
+            g_stf_out[o + 1 + i++] = M2_COPFIFO;
+        } else {
+            for (i = 0; i < na; i++) m2_cop_pi(a[i]);
+            for (i = 0; i < nr; i++) g_stf_out[o + 1 + i] = M2_COPFIFO;
+        }
         m2_cop(COP_RMATRIX);
         for (; i < nr + 12; i++) g_stf_out[o + 1 + i] = M2_COPFIFO;
         /* a command that answers with more words than the model expects: take them too, until

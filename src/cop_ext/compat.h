@@ -65,8 +65,12 @@ static uint32_t dmB[0x800];             /* 0x31000..0x313FF and 0x31800..0x31BFF
 static uint32_t dmC[0x250];             /* 0x32000..0x3224F */
 static uint32_t dmZ[0x80][20];          /* 0x32300 + n*0x20: words 0..6 and 0x14..0x1F */
 #define ROT_CACHE ((float (*)[12])&dmA[0x30420u - 0x30280u])
+/* 0x30300..0x30302: 0, 1.0, 2.0, which cpres1's reset writes (PM 0x20080, i6 = 0x30300) and
+   0x80 and the collision code read as constants (m2-hle2 seeds them in cop.h) */
+static uint32_t dmK[3] = { 0, 0x3F800000u, 0x40000000u };
 
 static uint32_t *dm_ptr(uint32_t a) {
+    if (a - 0x30300u < 3u) return &dmK[a - 0x30300u];
     if (a >= 0x1400000u) {               /* buffer RAM; words 0x4000..0x7D7F are the VM's own */
         uint32_t w = (a - 0x1400000u) & 0x7fffu;
         return w - 0x4000u < 0x3D80u ? 0 : (uint32_t *)&BUF(w);

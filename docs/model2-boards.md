@@ -386,7 +386,8 @@ OK. MAME without the fork branch stops at the first absolute operand. The result
 ## Test: `src/stftest.c` (every command, every board)
 
 `-DM2_GAME=stftest` sends a list of cases through the COP: a matrix, then each cpres1
-command with random arguments, three times over (630 cases, 105 commands). After each case
+command with random arguments, three times over (630 cases, 105 commands), then an
+afterimage sequence (522 cases). After each case
 it reads the results, then the matrix (`RMATRIX`), then anything more the COP sends, and
 keeps them in `g_stf_out[]`. Nothing is drawn or printed. The cases come from
 `src/stftest_cases.h`:
@@ -406,15 +407,26 @@ run with the host model:
 python3 tools/stftest_cmp.py /tmp/w/t1.txt out2A.txt /tmp/w/h1.txt     # -v lists every difference
 ```
 
+The afterimage sequence fills the ring the way a fighter does: 0x81, the spacing and life
+(0x49 to DM 0x32181/0x32182), every unit matrix of both players (0x35) and the previous
+frame's (0x7f), then 8 frames of 0x80 per player with 1-16 parts (4 + 4n + 2 words in,
+n + 1 out; frame 5 teleports player 0), each followed by 0x7f, then per frame 0x82, six
+0x85, 0x83, 0x84, now and then 0x87 and once 0x86, and at the end 0x85 on all 128 slots.
+`stftest` streams 0x80 as STF's `zanzou_control` (i960 0x8AB10) does: each part's answer
+is read before the next part goes in, since 2A and 2C have 8-word FIFOs (MAME `model2.cpp`).
+
 A word matches exactly, is close (floats within 1e-4 relative or 1e-5 absolute), or differs.
-Results with the shared MAME, seeds 1-3 (about 7,980 words each):
+Results with the shared MAME, seed 1 (1,152 cases, 15,260 words):
 
 | | exact | close | differ |
 |---|---|---|---|
-| `dynamcop` (2A) vs host | 7875-7918 | 61-106 | 1-4 |
-| `dynamcopc` (2C) vs host | 7817-7842 | 139-164 | 2-4 |
-| `sfight` (cpres1) vs host | 7562-7581 | 396-412 | 6-14 |
-| `dynamcopc` vs `dynamcop` | 7827-7847 | 133-154 | 1-3 |
+| `dynamcop` (2A) vs host | 15190 | 66 | 4 |
+| `dynamcopc` (2C) vs host | 15078 | 178 | 4 |
+| `sfight` (cpres1) vs host | 13374 | 1877 | 9 |
+| `dynamcopc` vs `dynamcop` | 15089 | 168 | 3 |
+
+(The random cases alone, seeds 1-3, before the afterimage sequence: 2A 1-4 words differ,
+2C 2-4, `sfight` 6-14, of about 7,980.)
 
 "Close" is the boards' sine, divide and square root differing in the last bits: the
 host model computes them in double, each COP with its own seeds and tables. The words that
@@ -427,3 +439,19 @@ differ are edge cases, the same on 2A and 2C, where each COP gives its own answe
 
 `sfight` differs from the model in the same places, also in 0x28 when the three sides make
 no triangle (the square root of a negative), and on seed 2 in nine 0x7c (afterimage) words.
+
+The afterimage sequence matches on 2A and 2C word for word, and on `sfight` every word is
+exact or close (within 2e-6: cpres1's own sine for 0x80's turn). Two bugs, both fixed:
+
+- The model never set DM 0x30301, the 1.0 cpres1's reset writes (PM 0x20080: 0, 1.0, 2.0
+  from 0x30300). 0x80 reads it as the step between copies, so each part laid one copy,
+  not one per spacing: ring words 0-6 and the matrices of all later slots were wrong.
+  `src/cop_ext/compat.h` now holds the three constants.
+- MAME: 0x83 (`Fn_zanzou_load_matrix_inner`) loaded 12 zeros into the current matrix, and
+  0x84 and 0x87 used the same wrong words. They read and write the ring's matrix over the PM
+  bus (`pm(i8,m9)`, i8 = 0x32314 + 0x20n), and 0x80 stores it over DM. cpres1 never writes
+  SYSCON, so block 1 holds 32-bit data and both buses reach the same word. MAME read every
+  32-bit PM access through its packed 48-bit view. Fixed on the fork's `sharc-pm-block1`
+  branch, merged into `shared`: a 32-bit PM data access to block 1 uses the DM word when
+  IMDW1 is clear. Block 0 keeps the packed view: it holds the program, and cpres1's
+  `pm(0x21f18)` writes would land on instruction words in MAME's layout.
