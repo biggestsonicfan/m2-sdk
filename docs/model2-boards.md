@@ -449,9 +449,11 @@ exact or close (within 2e-6: cpres1's own sine for 0x80's turn). Two bugs, both 
   `src/cop_ext/compat.h` now holds the three constants.
 - MAME: 0x83 (`Fn_zanzou_load_matrix_inner`) loaded 12 zeros into the current matrix, and
   0x84 and 0x87 used the same wrong words. They read and write the ring's matrix over the PM
-  bus (`pm(i8,m9)`, i8 = 0x32314 + 0x20n), and 0x80 stores it over DM. cpres1 never writes
-  SYSCON, so block 1 holds 32-bit data and both buses reach the same word. MAME read every
-  32-bit PM access through its packed 48-bit view. Fixed on the fork's `sharc-pm-block1`
-  branch, merged into `shared`: a 32-bit PM data access to block 1 uses the DM word when
-  IMDW1 is clear. Block 0 keeps the packed view: it holds the program, and cpres1's
+  bus (`pm(i8,m9)`, i8 = 0x32314 + 0x20n), and 0x80 stores it over DM. cpres1's init
+  writes SYSCON 0xa100 (`dm(0)`; the i960's boot writes 0xa100/0xa110 too): IMDW0 (bit 8)
+  set, IMDW1 (bit 9) clear (ADI `def21060.h`: `IMDW0X 0x100`, `IMDW1X 0x200`). So block 1
+  holds 32-bit data and both buses reach the same word. MAME read every 32-bit PM access
+  through its packed 48-bit view. Fixed on the fork's `sharc-pm-block1` branch, merged into
+  `shared`: a 32-bit PM data access to block 1 uses the DM word when IMDW1 is clear. Block 0
+  keeps the packed view: it holds the program, IMDW0 makes it a 40-bit block, and cpres1's
   `pm(0x21f18)` writes would land on instruction words in MAME's layout.
