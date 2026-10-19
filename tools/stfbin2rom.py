@@ -8,9 +8,10 @@ parser.add_argument('--output', dest='output', type=str, help='[Optional] Output
 parser.add_argument('--verify', dest='verify', action=argparse.BooleanOptionalAction, help='[Optional] Use MD5 checksum verification on output (uses \"sfight.md5\" in script directory)')
 parser.add_argument('--ctools', dest='win', action=argparse.BooleanOptionalAction, help='[Optional] Handle stupid ctools stuff')
 parser.add_argument('--names', dest='names', nargs=2, metavar=('LO', 'HI'), default=['epr-19001.15', 'epr-19002.16'], help='[Optional] Output file names of the two EPROMs (default: sfight\'s epr-19001.15 epr-19002.16)')
+parser.add_argument('--size', dest='size', type=lambda v: int(v, 0), default=None, help='[Optional] Program image size (default 0x100000). With --size, a bigger image is an error, not truncated')
 parser.add_argument('--nopad', dest='nopad', action=argparse.BooleanOptionalAction, help='[Optional] Do NOT pad the ROM binary to 0x100000 with 0xFF (split as-is)')
 
-def SizeRom(rom, win, nopad=False):
+def SizeRom(rom, win, nopad=False, size=None):
     print("Checking ROM size for splitting...")
     if win:
         with open(rom.name, 'rb') as ctools_file:
@@ -18,7 +19,9 @@ def SizeRom(rom, win, nopad=False):
                 out_file.write(ctools_file.read()[int("0x2c", 16):])
         move(rom.name + "-fix", rom.name)
     rom_size = os.path.getsize(rom.name)
-    max_size = int("0x100000", 16)
+    max_size = size if size is not None else int("0x100000", 16)
+    if size is not None and rom_size > max_size:
+        sys.exit("Error: ROM binary is " + hex(rom_size) + " bytes, " + hex(rom_size - max_size) + " over the board's " + hex(max_size))
     if nopad:
         print("--nopad: leaving ROM binary unpadded at " + str(hex(rom_size)))
         return
@@ -41,7 +44,7 @@ def SizeRom(rom, win, nopad=False):
 def main():        
     try:
         args = parser.parse_args()
-        SizeRom(args.input, args.win, args.nopad)
+        SizeRom(args.input, args.win, args.nopad, args.size)
         output_dir = pathlib.Path(str(args.input.name)).parent.resolve()
         if args.output != None:
             if os.path.isdir(args.output) == True:
@@ -78,7 +81,7 @@ def main():
                 
         except FileNotFoundError:
            print("Error: Input file \"" + args.input + "\" not found.")
-    except:
+    except Exception:   # not SystemExit: an oversize image (--size) must fail the build
         parser.print_help()  
 
 if __name__ == '__main__':

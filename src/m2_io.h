@@ -15,6 +15,7 @@
  * = byte addr / 2, and sega/model2.cpp model2b hookup + INPUT_PORTS(model2)):
  *   port A (0x00) OUT eeprom/ctrl-mode, port B (0x02) IN0 system,
  *   port C (0x04) IN1 = P1, port D (0x06) IN2 = P2. All inputs ACTIVE-LOW.
+ * The original Model 2 has no 315-5649; m2_io_in() below reads its Model 1 IO board.
  */
 #ifndef M2_IO_H
 #define M2_IO_H
@@ -62,6 +63,43 @@ _Static_assert(__builtin_offsetof(m2_io_t, mode)   == 0x1C, "m2_io_t.mode");
 #define M2_INP_RIGHT   0x40u
 #define M2_INP_LEFT    0x80u
 
+/* ---- the three input bytes, on every board ---------------------------------- */
+
+#if M2_BOARD_MODEL1IO
+/* Start the Model 1 IO board (m2_init calls it). Its Z80 (epr-14869c) leaves the dpram alone
+ * until the main CPU has written "SEGA" to dpram bytes 0x1A-0x1D and 1 to byte 0x20; then it
+ * fills bytes 0-7 with the ADC channels and 8/9/10 with IN0/IN1/IN2. This is DaytonaTestRom
+ * main.c initIO(); STF still does it on 2B, where nothing reads it. */
+M2_API void m2_io_model1_init(void) {
+    volatile u8 *dp = (volatile u8 *)0x01C00000u;
+    dp[0x40] = 0x00;                           /* busy while the rest is written */
+    dp[0x1C] = 0xFF; dp[0x14] = 0xFF;          /* inputs idle (active-low)      */
+    dp[0x12] = 0xFF; dp[0x10] = 0xFF;
+    dp[0x1E] &= 0xF0;                          /* lamps off                     */
+    dp[0x22] = 0xFF;                           /* drive board idle              */
+    dp[0x24] = 0x01;
+    dp[0x34] = 'S'; dp[0x36] = 'E'; dp[0x38] = 'G'; dp[0x3A] = 'A';
+    dp[0x40] = 0x01;
+}
+#endif
+
+/* m2_io_in(0) = system (M2_IN0_*), 1 = P1, 2 = P2 (M2_INP_*); raw, active-low.
+ * On the original Model 2 (M2_BOARD_MODEL1IO) the inputs come from the Model 1 IO board
+ * through the MB8421 dual-port RAM at 0x01C00000: its CPU writes IN0/IN1/IN2 to dpram
+ * bytes 8/9/10 (i960 0x01C00010/12/14), once m2_io_model1_init has started it; byte 0x20
+ * (0x01C00040) goes back to 1 if it reads 0. That is DaytonaTestRom main.c readIO(); MAME model2o_mem maps the dpram
+ * umask32 0x00ff00ff. Daytona wires IN1 to the VR4 button and the gearbox, not a stick. */
+M2_API u8 m2_io_in(int n) {
+#if M2_BOARD_MODEL1IO
+    volatile u8 *dp = (volatile u8 *)0x01C00000u;
+    if (dp[0x40] == 0) dp[0x40] = 1;
+    return dp[0x10 + 2 * n];
+#else
+    M2_IO.bank = 0;                       /* normal-input mode */
+    return (&M2_IO.in0)[2 * n];
+#endif
+}
+
 /* ---- per-player decoded snapshot ------------------------------------------- */
 
 /* One player's inputs, decoded to active-HIGH flags: each field is 1 while held,
@@ -78,9 +116,8 @@ typedef struct {
 M2_API m2_player_t m2_player(int player) {
     m2_player_t p;
     u8 v, s;
-    M2_IO.bank = 0;                       /* normal-input mode */
-    s = M2_IO.in0;
-    v = player ? M2_IO.in2 : M2_IO.in1;
+    s = m2_io_in(0);
+    v = m2_io_in(player ? 2 : 1);
     p.up    = !(v & M2_INP_UP);
     p.down  = !(v & M2_INP_DOWN);
     p.left  = !(v & M2_INP_LEFT);
@@ -103,9 +140,9 @@ enum { M2_UP = 1, M2_DOWN = 2, M2_LEFT = 4, M2_RIGHT = 8,
 
 /* Both players' start, from in0: bit0 = START1, bit1 = START2 (active-low -> 1 = held). */
 M2_API u32 m2_start(void) {
-    M2_IO.bank = 0;
-    return (!(M2_IO.in0 & M2_IN0_START1) ? 1u : 0u)
-         | (!(M2_IO.in0 & M2_IN0_START2) ? 2u : 0u);
+    u8 s = m2_io_in(0);
+    return (!(s & M2_IN0_START1) ? 1u : 0u)
+         | (!(s & M2_IN0_START2) ? 2u : 0u);
 }
 
 /* Pressed-button bitmask for player 0 (P1/IN1) or 1 (P2/IN2). Includes M2_START for this
@@ -116,8 +153,7 @@ M2_API u32 m2_start(void) {
 M2_API u32 m2_input(int player) {
     u8 v;
     u32 r = 0;
-    M2_IO.bank = 0;                 /* normal-input mode */
-    v = player ? M2_IO.in2 : M2_IO.in1;   /* active-low */
+    v = m2_io_in(player ? 2 : 1);   /* active-low */
     if (!(v & M2_INP_UP))    r |= M2_UP;
     if (!(v & M2_INP_DOWN))  r |= M2_DOWN;
     if (!(v & M2_INP_LEFT))  r |= M2_LEFT;

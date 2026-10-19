@@ -9,6 +9,7 @@
  *   cmake ... -DM2_GAME=meshcube -DM2_BOARD=2A     run on dynamcop
  *   cmake ... -DM2_GAME=meshcube -DM2_BOARD=2C     run on dynamcopc
  *   cmake ... -DM2_GAME=meshcube                   run on sfight (needs cpres1.h)
+ *   cmake ... -DM2_GAME=meshcube_ext -DM2_BOARD=2A the same with M2_COP_EXT, checking the VM first
  */
 #include "m2.h"
 #include "m2_obj.h"
@@ -37,6 +38,36 @@ static const u16 g_color[6] = {
 };
 static u32 g_hdr[6][4];
 
+#if defined(M2_COP_EXT) && !M2_BOARD_SHARC
+/* M2_COP_EXT check, once after m2_silicon_boot: the VM's mark must still be at buffer RAM word
+ * 0x4000 (geometry_stuff once overwrote it, and the kernel then ignored every VM command), and a
+ * VM command with a result must answer: 0x19, 1/sqrt(16) = 0.25. The answer is polled with a
+ * limit, so a kernel that doesn't run the VM fails the check instead of hanging the i960.
+ * g_copext: bit 0 mark found, bit 1 answer arrived, bit 2 answer right; 7 = pass. On a fail the
+ * cube is drawn all red. */
+u32 g_copext, g_copext_mark, g_copext_ans;
+static int copext_check(void) {
+    volatile u32 *cf = (volatile u32 *)M2_COPFIFO_ADDR;
+    volatile u32 *st = (volatile u32 *)COP_STATUS_REG;
+    u32 i, d;
+    g_copext_mark = ((volatile u32 *)GEO_BUFFERRAM)[M2_COP_EXT_BASE];
+    if (g_copext_mark == m2_cop_ext_image[0]) g_copext |= 1u;
+    *cf = COP_CMD(0x19);
+    *cf = 0x41800000u;                                  /* 16.0f */
+    for (i = 0; i < 2000000u && (*st & 1u); i++) { }
+    if (!(*st & 1u)) {
+        g_copext |= 2u;
+        g_copext_ans = *cf;
+        d = g_copext_ans > 0x3e800000u ? g_copext_ans - 0x3e800000u : 0x3e800000u - g_copext_ans;
+        if (d < 0x400u) g_copext |= 4u;                 /* within ~1e-4 of 0.25 */
+    }
+    for (i = 0; i < 2000u; i++) if (!(*st & 1u)) { (void)*cf; i = 0; }   /* drop strays */
+    return g_copext == 7u;
+}
+#else
+static int copext_check(void) { return 1; }
+#endif
+
 static void upload_faces(void) {
     volatile u32 *fifo = (volatile u32 *)M2_GEOFIFO_ADDR;
     static const signed char su[4] = { -1, 1, -1, 1 }, sv[4] = { -1, -1, 1, 1 };
@@ -60,12 +91,13 @@ static void upload_faces(void) {
 
 int main(void) {
     u32 t = 0;
-    int k, i;
+    int k, i, ok;
     m2_init();
     m2_silicon_boot();
+    ok = copext_check();
     m2_obj_fill_patch();
     for (k = 0; k < 6; k++) {
-        m2_3d_solid(FACE_CB + k, g_color[k]);
+        m2_3d_solid(FACE_CB + k, ok ? g_color[k] : M2_RGB(31, 0, 0));
         g_hdr[k][0] = 0u;
         g_hdr[k][1] = GEO_TEXRAM_BIT | ((FACE_CB + k) * 4u);
         g_hdr[k][2] = FACE_OBA + 16u * k;

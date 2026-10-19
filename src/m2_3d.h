@@ -172,7 +172,7 @@ static void m2_cop_ext_upload(void) {
 static void m2_cop_ext_upload(void) { }
 #endif
 
-#if defined(M2_BOARD_2A)
+#if defined(M2_BOARD_2A_TGP)  /* 2A, and the original Model 2 (same TGP) */
 /* Model 2A: the COP is a TGP (MB86234). It runs the SDK's own program, src/m2_tgp_kernel.s
  * (assembled into m2_tgp_kernel.h by tools/tgpasm.py), which answers the same FIFO protocol
  * for the scalar, trig, vector and matrix commands, PUSH/POP and COP_SUBMIT; see the list at

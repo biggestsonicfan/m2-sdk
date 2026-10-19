@@ -323,7 +323,7 @@ M2_API void m2__build_colorxlat(void) {
  * 32-bit word (m2_board.h), so the same ramp goes there at that stride; 2C has nothing
  * mapped there (MAME model2c_crx_mem) and dynamcopc never writes it. */
 M2_API void m2__build_luma2(void) {
-#if defined(M2_BOARD_2A)
+#if defined(M2_BOARD_2A_TGP)
     volatile u32 *luma2 = (volatile u32 *)0x12800000u;
 #else
     volatile u16 *luma2 = (volatile u16 *)0x12800000u;
@@ -357,6 +357,9 @@ M2_API void m2_init(void) {
     m2__build_luma2();        /* STF start_again_ip: LUMA2 (0x12800000) ramp */
     m2_setpal(0, 0);          /* default backdrop = black (games may override) */
 
+#if M2_BOARD_MODEL1IO
+    m2_io_model1_init();      /* original Model 2: start the Model 1 IO board (m2_io.h) */
+#endif
     M2_RENDERMODE = M2_BOARD_RENDERMODE; /* STF start_again_ip: 0x4004; 2A: 4 (m2_board.h) */
     M2_HSYNC = (u16)-84;        /* 0xFFAC — matches STF start_again_ip */
     M2_VSYNC = (u16)-3;         /* 0xFFFD — STF's value (was -2/0xFFFE, one line off) */

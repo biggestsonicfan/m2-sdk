@@ -1,7 +1,9 @@
 /*
  * m2_board.h — which Model 2 board the build targets, and the addresses that differ.
  *
- * Pick one at build time (CMake: -DM2_BOARD=2A|2B|2C, which defines the macro):
+ * Pick one at build time (CMake: -DM2_BOARD=2O|2A|2B|2C, which defines the macro):
+ *   M2_BOARD_2O  original Model 2 (MAME model2o): TGP coprocessor, Model 1 IO board
+ *                                                          test set: desert (or daytona)
  *   M2_BOARD_2A  Model 2A-CRX: TGP (Fujitsu MB86234) coprocessor     test set: dynamcop
  *   M2_BOARD_2B  Model 2B-CRX: SHARC ADSP-21062 COP + SHARC GEO      test set: sfight (default)
  *   M2_BOARD_2C  Model 2C-CRX: TGPx4 (Fujitsu MB86235) coprocessor   test set: dynamcopc
@@ -28,15 +30,39 @@
 #ifndef M2_BOARD_H
 #define M2_BOARD_H
 
-#if defined(M2_BOARD_2A) + defined(M2_BOARD_2B) + defined(M2_BOARD_2C) > 1
-#error "define only one of M2_BOARD_2A / M2_BOARD_2B / M2_BOARD_2C"
+#if defined(M2_BOARD_2O) + defined(M2_BOARD_2A) + defined(M2_BOARD_2B) + defined(M2_BOARD_2C) > 1
+#error "define only one of M2_BOARD_2O / M2_BOARD_2A / M2_BOARD_2B / M2_BOARD_2C"
 #endif
-#if !defined(M2_BOARD_2A) && !defined(M2_BOARD_2C) && !defined(M2_BOARD_2B)
+#if !defined(M2_BOARD_2O) && !defined(M2_BOARD_2A) && !defined(M2_BOARD_2C) && !defined(M2_BOARD_2B)
 #define M2_BOARD_2B 1
 #endif
 
+/* The original Model 2 (Daytona USA, MAME model2o) is a 2A on the i960 side: the same TGP
+ * (model2_tgp_state; its program is uploaded the same way, so the SDK's 2A TGP kernel runs),
+ * the same texture/luma map and render mode 4 (DaytonaTestRom main.c writes 0x04). What differs
+ * (model2o_mem):
+ *   - the program ROM pair is 2 x 128 KB (desert epr-16976.12 / .13, daytona epr-16722a.12 /
+ *     .13): a 256 KB image;
+ *   - 0x200000 is 128 KB of RAM (2A: 256 KB) and 0x220000.. maps program ROM +0x20000;
+ *   - 0x01C00000 is the MB8421 dual-port RAM to the Model 1 IO board (umask32 0x00ff00ff:
+ *     dpram byte n at 0x01C00000 + 2*n), not the 315-5649 (m2_io.h reads it for you).
+ * Credit: DaytonaTestRom (Steve Jones, MIT, github.com/stevej0/DaytonaTestRom). */
+#if defined(M2_BOARD_2O)
+#define M2_BOARD_2A_TGP      1            /* TGP board: 2A's texture map and kernel             */
+#define M2_BOARD_MODEL1IO    1            /* inputs through the Model 1 IO board dpram          */
+#else
+#define M2_BOARD_MODEL1IO    0
+#endif
 #if defined(M2_BOARD_2A)
+#define M2_BOARD_2A_TGP      1
+#endif
+
+#if defined(M2_BOARD_2A_TGP)
+#if defined(M2_BOARD_2O)
+#define M2_BOARD_NAME        "Model 2"
+#else
 #define M2_BOARD_NAME        "Model 2A"
+#endif
 #define M2_BOARD_TEXRAM0     0x12000000u  /* texture RAM 0 (tex0_w)                            */
 #define M2_BOARD_TEXRAM1     0x12400000u  /* texture RAM 1 (tex1_w)                            */
 #define M2_BOARD_TEX_STRIDE  2u           /* bus words per 32 bits of texels: one halfword each */

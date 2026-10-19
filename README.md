@@ -28,7 +28,7 @@ Build a different program with `-DM2_GAME=<name>` (compiles `src/<name>.c`).
 Drop your own `.c` in `src/` and reconfigure. Or use the equivalent batch script:
 `cmd /c ".\build_clang64.bat demo"`.
 
-### Model 2A and 2C
+### Model 2A, 2C and the original Model 2
 
 `-DM2_BOARD=2A` or `2C` builds for the other Model 2 boards (default `2B`). 2A runs on
 `dynamcop`, 2C on `dynamcopc`. On 2A the COP runs the SDK's own TGP program
@@ -40,7 +40,15 @@ the upper half of buffer RAM, so the GEO display-list buffers are halved. `src/s
 checks every command on all three boards. The
 `m2_obj.h` 3D path runs on 2A and 2C with your own
 object headers (`m2_obj_submit_hdr`); STF's model table is only in `sfight`. Details, the
-address map, `src/coptest.c`, `src/objtest.c`, `src/meshcube.c` (a spinning cube on all three boards), `src/abstest.c` (the 2C TGPx4's absolute address mode) and `src/stftest.c`: [`docs/model2-boards.md`](docs/model2-boards.md).
+address map, `src/coptest.c`, `src/objtest.c`, `src/meshcube.c` (a spinning cube on all three boards), `src/abstest.c` (the 2C TGPx4's absolute address mode), `src/stftest.c` and `src/vaporbench.c` (a vaporwave scene that times every COP command on each board): [`docs/model2-boards.md`](docs/model2-boards.md).
+
+`-DM2_BOARD=2O` builds for the original Model 2 (MAME `model2o`). It runs on `desert`
+(Desert Tank), or on `daytona` with `-DM2_2O_SET=daytona`. It is a 2A with the same TGP,
+so the TGP program and `M2_COP_EXT` work unchanged. Its program ROM is 256 KB, and the build
+fails if the image is bigger. Its inputs come from the Model 1 IO board, which `m2_init`
+starts and `m2_input` reads. `src/inputtest.c` shows them on any board. The memory map
+and the IO handshake come from [DaytonaTestRom](https://github.com/stevej0/DaytonaTestRom)
+(Steve Jones, MIT).
 
 ### Soft-float (DEFAULT — the real i960 has no usable FPU)
 
@@ -152,7 +160,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport (uses `M2_IO`). |
 | `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
-| `m2_board.h` | Which board (`M2_BOARD_2A`/`2B`/`2C`) and the addresses that differ. Included by `m2_constants.h`. |
+| `m2_board.h` | Which board (`M2_BOARD_2O`/`2A`/`2B`/`2C`) and the addresses that differ. Included by `m2_constants.h`. |
 | `m2_tgp_kernel.s` / `.h` | The SDK's Model 2A COP program (TGP) and its generated header; `m2_cop_boot` uploads it on 2A. |
 
 The i960 reset/boot + interrupt tables are `src/kx_init.s`, `kx_ftbl.s`,
@@ -183,6 +191,9 @@ i.e. `C:\msys64\clang64\bin`. That directory **must be on `PATH`** — otherwise
 `i960-elf-gcc`/`-as`/`-ld`/`-objcopy` all live there. Flags that matter
 (baked into `toolchain-i960-elf.cmake`): `-mkb` (i960KB), `-ffreestanding`
 (no libc), `-fleading-underscore` (match the boot asm's `_main`/`_frameVBL`/…).
+
+GCC 11.5 at `-O2` can branch on a stale compare after `bbs`/`bbc`, which set the
+condition code: see [`docs/i960-gcc-bbs-bug.md`](docs/i960-gcc-bbs-bug.md).
 
 ## Layout
 
