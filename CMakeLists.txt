@@ -19,7 +19,8 @@ endif()
 # Target board (src/m2_board.h). Each one names the program EPROM pair after the MAME set
 # the build replaces: 2B = sfight (Sonic the Fighters), 2A = dynamcop, 2C = dynamcopc
 # (Dynamite Cop, which shipped on all three boards), 2O = the original Model 2: desert
-# (Desert Tank; complete in this container) or daytona (-DM2_2O_SET=daytona). Its first
+# (Desert Tank; complete in this container) or daytona (-DM2_2O_SET=daytona; MAME needs
+# blank stand-ins for its drive and comms board ROMs, see docs/model2-boards.md). Its first
 # program pair is 2 x 128 KB, so the image must fit in 256 KB.
 set(M2_BOARD "2B" CACHE STRING "Model 2 board: 2O, 2A, 2B or 2C")
 set_property(CACHE M2_BOARD PROPERTY STRINGS 2O 2A 2B 2C)

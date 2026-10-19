@@ -66,9 +66,21 @@ All of this, the memory map and the IO handshake, comes from
 [DaytonaTestRom](https://github.com/stevej0/DaytonaTestRom) (Steve Jones, MIT, `main.h`,
 `main.c` `initIO`/`readIO`), checked against MAME `model2o_mem` and `ROM_START(desert)`.
 
-The test set is `desert`, the only complete `model2o` set here. The `daytona` sets lack the
-IO board's `epr-16488a.ic12` and the drive board's `epr-16726.bin`, and `vcop` lacks the
-`hd44780` ROM. `-DM2_2O_SET=daytona` names the ROMs for `daytona`. Results on `desert` in the shared MAME:
+The test set is `desert`, the only complete `model2o` set here. `vcop` lacks the `hd44780`
+ROM. The `daytona` sets lack two ROMs of the add-on boards: the drive board's
+`epr-16488a.ic12` (838-10646, force feedback) and the comms board's `epr-16726.bin` (linked
+cabinets). The i960, TGP, IO board and sound ROMs are all there. MAME refuses a set with
+missing ROMs but runs one with wrong checksums, and SDK programs use neither board. So
+`-DM2_2O_SET=daytona` builds run on `daytona` with zero-filled stand-ins for those two ROMs.
+Put them next to the program ROMs in your own rompath folder, never in the shared ROM folder:
+
+```sh
+head -c 65536  /dev/zero > myroms/daytona/epr-16488a.ic12
+head -c 131072 /dev/zero > myroms/daytona/epr-16726.bin
+mame daytona -rompath "myroms;$ROMS_DIR"
+```
+
+Results on `desert` in the shared MAME:
 
 | Program | Result |
 |---|---|
@@ -76,6 +88,7 @@ IO board's `epr-16488a.ic12` and the drive board's `epr-16726.bin`, and `vcop` l
 | `meshcube` | the spinning cube |
 | `meshcube_ext` | VM mark `M2VM` at word 0x4000, cmd 0x19 = 0.25: PASS (`tools/copext_check.lua`) |
 | `vaporbench` | 30/30 natives, 106/106 ext, scene 3065 us; every ext answer is the same as 2A's, every native time within 0.2 us of it |
+| `vaporbench` on `daytona` | the same: 30/30, 106/106 with the same answers as `desert`, scene 3066 us, natives within 0.12 us |
 | `inputtest` | START1 held: IN0 bit 4 clears, `m2_start` = 1, `m2_input(0)` has `M2_START` (`tools/inputtest_check.lua`) |
 
 `inputtest` also shows `M2_START` on P2 (`m2_input(1)`) while only START1 is held, on 2A
