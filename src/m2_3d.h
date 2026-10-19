@@ -152,6 +152,26 @@ static void m2_3d_boot(void) {
 
 #else /* !M2_BOARD_SHARC */
 
+/* M2_COP_EXT (define it before including the SDK): every other cpres1 command on 2A/2C too. The
+ * kernels run the commands they have no native code for as m2-hle2's cpres1 model, compiled for
+ * RV32IF and translated into bytecode their VM interprets (src/cop_ext/, docs/model2-boards.md).
+ * The program and its data take buffer RAM words 0x4000..0x7FFF (i960 0x910000..0x91FFFF), so
+ * the GEO display-list buffers shrink to the lower half (m2_geo.h). Same FIFO protocol, same
+ * results as cpres1, but interpreted: a few hundred to a few thousand VM instructions a command.
+ * Without M2_COP_EXT the kernels ignore those commands (their arguments are then read as
+ * commands): they run the VM only when image word 0, buffer RAM word 0x4000, is the mark "M2VM". */
+#if defined(M2_COP_EXT)
+#include "m2_cop_ext_image.h"
+static void m2_cop_ext_upload(void) {
+    volatile u32 *b = (volatile u32 *)GEO_BUFFERRAM;
+    u32 i;
+    for (i = 0; i < M2_COP_EXT_WORDS; i++) b[M2_COP_EXT_BASE + i] = m2_cop_ext_image[i];
+    for (i = M2_COP_EXT_BASE + M2_COP_EXT_WORDS; i < M2_COP_EXT_BSS_END; i++) b[i] = 0u;
+}
+#else
+static void m2_cop_ext_upload(void) { }
+#endif
+
 #if defined(M2_BOARD_2A)
 /* Model 2A: the COP is a TGP (MB86234). It runs the SDK's own program, src/m2_tgp_kernel.s
  * (assembled into m2_tgp_kernel.h by tools/tgpasm.py), which answers the same FIFO protocol
@@ -169,6 +189,7 @@ static void m2_cop_boot(void) {
     for (i = 0; i < (int)(sizeof(m2_tgp_kernel) / sizeof(m2_tgp_kernel[0])); i++)
         *fifo = m2_tgp_kernel[i];
     *ctl = save;
+    m2_cop_ext_upload();
 }
 #else
 /* Model 2C: the COP is a TGPx4 (MB86235), with 64-bit program words. It runs the SDK's own
@@ -192,6 +213,7 @@ static void m2_cop_load(const u32 *prog, int n) {
 }
 static void m2_cop_boot(void) {
     m2_cop_load(m2_tgpx4_kernel, (int)(sizeof(m2_tgpx4_kernel) / sizeof(m2_tgpx4_kernel[0])));
+    m2_cop_ext_upload();
 }
 #endif
 

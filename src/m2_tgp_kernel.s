@@ -13,8 +13,9 @@
 ; the matrix back, ATAN2 (the azimuth m2_obj_frame_setup asks for), the PUSH/POP matrix
 ; stack, and SUBMIT (0x78), which writes the matrix and the object into buffer RAM for the
 ; geometrizer.
-; Commands not listed in the table are ignored (their arguments would then be read as
-; commands: don't send them on 2A).
+; The commands cpres1 has and this file has no code for (0x00-0x87, except the ones cpres1
+; ignores) run in the VM at the end of the file; 0x88-0xff and those are ignored (their
+; arguments would then be read as commands).
 ;
 ; Hardware used (MAME src/mame/sega/model2.cpp, copro_tgp_*): rf1 = input FIFO (a read
 ; waits for data), rf2 = output FIFO, io 0x20/0x21 = sin/cos of a 16-bit angle, io
@@ -57,6 +58,18 @@
 .equ SNF, 0x5a
 .equ SP2, 0x5b
 
+.equ VPC, 0x40          ; the VM (see "the COP VM" below): its pc as a buffer RAM word, the
+.equ IW,  0x41          ; instruction word, scratch, the sign bit, the code base (0x10000000)
+.equ VT,  0x42          ; and the initial sp. x0..x31 are data RAM 0x00, f0..f31 0x20.
+.equ VU,  0x43
+.equ VAD, 0x44
+.equ VSH, 0x45
+.equ VSG, 0x46
+.equ VLK, 0x47
+.equ VSTK, 0x48
+.equ VMK, 0x49          ; 0x4d32564d, the mark in buffer RAM word 0x4000 (image word 0, tools/rv2cvm.py)
+.equ VMENTRY, 0x4001    ; buffer RAM word of the program's _start (src/cop_ext/vm.ld); 0x4000 is the mark
+
 ; The current matrix, laid out as cpres1 keeps its bone slot (m2-hle sharc_exec.h, Fn_get_matrix):
 ; three rotation columns, then the translation T. A point p maps to col0*p.x + col1*p.y + col2*p.z + T.
 .equ C0X, 0x60
@@ -98,6 +111,23 @@ start:  set #0x0800             ; same start-up state as Dynamite Cop's program
         lia #0x0101
         orad
         mov d, $KOBJ            ; 0x00800101
+        lid #0x8000
+        lsld
+        mov d, $VSG             ; 0x80000000
+        lid #0x1000
+        lsld
+        mov d, $VLK             ; 0x10000000
+        lid #0x1001
+        lsld
+        lia #0xf600
+        orad
+        mov d, $VSTK            ; 0x1001f600
+        lid #0x4d32
+        lsld
+        lia #0x564d
+        orad
+        mov d, $VMK             ; 0x4d32564d ("M2VM")
+        ldi #0x20, b1           ; (bx1) = the VM's float registers
         brif alw #ident         ; start with the identity matrix
 
 loop:   mov rf1, b              ; command word
@@ -584,13 +614,18 @@ rmat:   mov $C0X, rf2           ; 0x05 -> col0, col1, col2, T (the slot as cpres
 ; PUSH at depth >= 7 and POP at depth >= 8 only change the count, and POP at depth 0 does
 ; nothing. After 8 pushes the first POP leaves the matrix as it is.
 
-push:   mov $DEP, d             ; 0x01: depth++, and below depth 7 save the matrix
+push:   bsif alw #pushs         ; 0x01
+        brif alw #loop
+pop:    bsif alw #pops          ; 0x02
+        brif alw #loop
+
+pushs:  mov $DEP, d             ; depth++, and below depth 7 save the matrix
         lia #1
         addd
         mov d, $DEP
         lia #8
         subd
-        brif ged #loop          ; the old depth was >= 7
+        rtif ged                ; the old depth was >= 7
         mov $SPX, x1
         ldi #C0X, x0
         rep #12
@@ -599,18 +634,18 @@ push:   mov $DEP, d             ; 0x01: depth++, and below depth 7 save the matr
         lia #12
         addd
         mov d, $SPX
-        brif alw #loop
+        rtif alw
 
-pop:    mov $DEP, d             ; 0x02: depth--, and below depth 8 restore the matrix
+pops:   mov $DEP, d             ; depth--, and below depth 8 restore the matrix
         lia #0
         orad
-        brif zrd #loop          ; depth 0: nothing
+        rtif zrd                ; depth 0: nothing
         lia #1
         subd
         mov d, $DEP
         lia #7
         subd
-        brif ged #loop          ; the old depth was >= 8
+        rtif ged                ; the old depth was >= 8
         mov $SPX, d
         lia #12
         subd
@@ -619,6 +654,24 @@ pop:    mov $DEP, d             ; 0x02: depth--, and below depth 8 restore the m
         ldi #C0X, x1
         rep #12
         mov (x0+1)+0x200, (x1+1)
+        rtif alw
+
+init:   mov $DEP, d             ; 0x00 (cpres1 Fn_initialize): depth 0, back to the first slot. That
+        lia #0                  ; slot holds the matrix the first PUSH saved, so with a depth the
+        orad                    ; matrix becomes that one
+        brif zrd #loop
+        ldi #0, x0
+        ldi #C0X, x1
+        rep #12
+        mov (x0+1)+0x200, (x1+1)
+        ldi #0, d
+        mov d, $DEP
+        mov d, $SPX
+        brif alw #loop
+
+ldmat:  ldi #C0X, x1            ; 0x04 (12 words) -> col0, col1, col2, T
+        rep #12
+        mov rf1, (x1+1)
         brif alw #loop
 
 ; ---- SUBMIT (cpres1 Fn_put_poly, stf-sharc cpres1.asm) ---------------------------------------
@@ -876,104 +929,716 @@ divp:   mov a, $DN
         fsmd
         rtif alw
 
+; ---- the COP VM: every other cpres1 command ---------------------------------------------------
+; The commands without code above run as C (m2-hle2's cpres1 model, src/cop_ext/) compiled for
+; RV32IF and translated by tools/rv2cvm.py into one bytecode word per RISC-V instruction:
+;     bit 31 = 0 | op 30:23 | A 22:18 | B 17:13 | C 12:0 (signed; or rs2 in its low 5 bits)
+; The i960 uploads the program into buffer RAM words 0x4000..0x7D7F (m2_cop_ext_upload, m2_3d.h); this
+; interpreter runs it with io banked onto buffer RAM (rf3 = 0x400000). A VM address a is buffer
+; RAM word (a >> 2) & 0x7fff. The registers are data RAM: x0..x31 at 0x00, f0..f31 at 0x20
+; (b1 = 0x20 makes (bx1) the float bank). The program reads its arguments with IN and sends
+; its results with OUT, so the FIFO protocol is cpres1's. Natives: IN OUT SIN COS (io tables),
+; IRD IWR (data RAM: the matrix), PUSH POP (the stack above), RSQRT, HALT.
+
+vm:     lia #table              ; d = table + command number
+        subd
+        mov d, $0x0a            ; a0 = the command number
+        ldi #0x400000, b
+        mov b, rf3              ; io = buffer RAM
+        lid #0x4000
+        mov d, x1
+        mov (x1) (e), d         ; the mark: is the program there (M2_COP_EXT)?
+        mov $VMK, a
+        eord
+        brif zrd #vm1
+        ldi #0, d               ; no: ignore the command, as cpres1's unknown ones
+        mov d, rf3
+        brif alw #loop
+vm1:    ldi #0, d
+        mov d, $0x00            ; x0
+        mov $VSTK, d
+        mov d, $0x02            ; sp
+        ldi #VMENTRY, d
+        mov d, $VPC
+        brif alw #vmnext
+
+; Writers: x[A] = d (not x0), f[A] = d; then the next instruction.
+wx:     mov d, b
+        mov $IW, d
+        ldi #18, sft
+        lsrd
+        lia #0x1f
+        andd
+        brif zrd #vmnext
+        mov d, x1
+        mov b, (x1)
+vmnext: mov $VPC, x1            ; fetch, VPC + 1, dispatch on bits 30:23
+        mov (x1) (e), b
+        mov b, $IW
+        mov $VPC, d
+        lia #1
+        addd
+        mov d, $VPC
+        mov bh, d
+        lia #vtab
+        addd
+        brul alw d
+
+wf:     mov d, b
+        mov $IW, d
+        ldi #18, sft
+        lsrd
+        lia #0x1f
+        andd
+        mov d, x1
+        mov b, (bx1)
+        brif alw #vmnext
+
+; Readers. xbc: d = x[B], a = x[C]. xbi: d = x[B], a = C. fbc: d = f[B], a = f[C].
+; brp: d = x[B], a = x[A]. xa: b = x[A]. fa: b = f[A].
+xbc:    mov $IW, d
+        lia #0x1f
+        andd
+        mov d, x1
+        mov (x1), b
+xbb:    mov $IW, d
+        ldi #13, sft
+        lsrd
+        lia #0x1f
+        andd
+        mov d, x1
+        mov b, a
+        mov (x1), d
+        rtif alw
+
+xbi:    mov $IW, d
+        ldi #19, sft
+        lsld
+        asrd
+        mov d, b
+        brif alw #xbb
+
+fbc:    mov $IW, d
+        lia #0x1f
+        andd
+        mov d, x1
+        mov (bx1), b
+        mov $IW, d
+        ldi #13, sft
+        lsrd
+        lia #0x1f
+        andd
+        mov d, x1
+        mov b, a
+        mov (bx1), d
+        rtif alw
+
+brp:    bsif alw #xa
+        brif alw #xbb
+
+xa:     mov $IW, d
+        ldi #18, sft
+        lsrd
+        lia #0x1f
+        andd
+        mov d, x1
+        mov (x1), b
+        rtif alw
+
+fa:     mov $IW, d
+        ldi #18, sft
+        lsrd
+        lia #0x1f
+        andd
+        mov d, x1
+        mov (bx1), b
+        rtif alw
+
+; d = (d < a) signed / unsigned, as 0 or 1 (flags set from it)
+slt:    mov d, $VT
+        mov a, $VU
+        eord
+        brif ged #slt1          ; same sign: the difference can't overflow
+        mov $VT, d              ; signs differ: d < a when d is the negative one
+        brif alw #slt2
+slt1:   mov $VT, d
+        mov $VU, a
+        subd
+slt2:   ldi #31, sft
+        lsrd
+        rtif alw
+sltu:   mov d, $VT
+        mov a, $VU
+        eord
+        brif ged #slt1
+        mov $VU, d              ; top bits differ: d < a when a has it
+        brif alw #slt2
+
+; d = buffer RAM word of the address d
+bword:  ldi #2, sft
+        lsrd
+        lia #0x7fff
+        andd
+        rtif alw
+
+; d = 1 / sqrt(d), d > 0, io = the tables: sqrtd's seed and correction without the final multiply
+rsqrtd: mov d, a
+        mov a, $0x2a (e)
+        ldi #0x7f, ah
+        mov $0x2a (e), b
+        fml : mov $0x2b (e), d
+        fmrd
+        rtif alw
+
+vLI:    mov $IW, d              ; x[A] = the pool word
+        lia #0x7fff
+        andd
+        mov d, x1
+        mov (x1) (e), d
+        brif alw #wx
+
+vADD:   bsif alw #xbc
+        addd
+        brif alw #wx
+vSUB:   bsif alw #xbc
+        subd
+        brif alw #wx
+vAND:   bsif alw #xbc
+        andd
+        brif alw #wx
+vOR:    bsif alw #xbc
+        orad
+        brif alw #wx
+vXOR:   bsif alw #xbc
+        eord
+        brif alw #wx
+vSLL:   bsif alw #xbc
+        bsif alw #shamt
+        lsld
+        brif alw #wx
+vSRL:   bsif alw #xbc
+        bsif alw #shamt
+        lsrd
+        brif alw #wx
+vSRA:   bsif alw #xbc
+        bsif alw #shamt
+        asrd
+        brif alw #wx
+shamt:  mov d, b                ; sft = a & 31, d kept
+        mov a, d
+        lia #31
+        andd
+        mov d, sft
+        mov b, d
+        rtif alw
+vSLT:   bsif alw #xbc
+        bsif alw #slt
+        brif alw #wx
+vSLTU:  bsif alw #xbc
+        bsif alw #sltu
+        brif alw #wx
+vADDI:  bsif alw #xbi
+        addd
+        brif alw #wx
+vANDI:  bsif alw #xbi
+        andd
+        brif alw #wx
+vORI:   bsif alw #xbi
+        orad
+        brif alw #wx
+vXORI:  bsif alw #xbi
+        eord
+        brif alw #wx
+vSLLI:  bsif alw #xbi
+        mov a, sft
+        lsld
+        brif alw #wx
+vSRLI:  bsif alw #xbi
+        mov a, sft
+        lsrd
+        brif alw #wx
+vSRAI:  bsif alw #xbi
+        mov a, sft
+        asrd
+        brif alw #wx
+vSLTI:  bsif alw #xbi
+        bsif alw #slt
+        brif alw #wx
+vSLTIU: bsif alw #xbi
+        bsif alw #sltu
+        brif alw #wx
+
+vLW:    bsif alw #xbi
+        addd
+        bsif alw #bword
+        mov d, x1
+        mov (x1) (e), d
+        brif alw #wx
+vFLW:   bsif alw #xbi
+        addd
+        bsif alw #bword
+        mov d, x1
+        mov (x1) (e), d
+        brif alw #wf
+vSW:    bsif alw #xbi
+        addd
+        bsif alw #bword
+        mov d, $VAD
+        bsif alw #xa
+        mov $VAD, x1
+        mov b, (x1) (e)
+        brif alw #vmnext
+vFSW:   bsif alw #xbi
+        addd
+        bsif alw #bword
+        mov d, $VAD
+        bsif alw #fa
+        mov $VAD, x1
+        mov b, (x1) (e)
+        brif alw #vmnext
+vLBU:   bsif alw #xbi           ; x[A] = byte (addr & 3) of the word
+        addd
+        mov d, $VAD
+        bsif alw #bword
+        mov d, x1
+        mov (x1) (e), b
+        mov $VAD, d
+        lia #3
+        andd
+        ldi #3, sft
+        lsld
+        mov d, sft
+        mov b, d
+        lsrd
+        lia #0xff
+        andd
+        brif alw #wx
+vSB:    bsif alw #xbi           ; byte (addr & 3) of the word = x[A] & 0xff
+        addd
+        mov d, $VAD
+        lia #3
+        andd
+        ldi #3, sft
+        lsld
+        mov d, $VSH
+        bsif alw #xa
+        mov b, d
+        lia #0xff
+        andd
+        mov $VSH, sft
+        lsld
+        mov d, $VT              ; (v & 0xff) << s
+        lid #0xff
+        lsld
+        notd
+        mov d, $VU              ; ~(0xff << s)
+        mov $VAD, d
+        bsif alw #bword
+        mov d, x1
+        mov (x1) (e), d
+        mov $VU, a
+        andd
+        mov $VT, a
+        orad
+        mov d, (x1) (e)
+        brif alw #vmnext
+
+vBEQ:   bsif alw #brp
+        subd
+        brif zrd #take
+        brif alw #vmnext
+vBNE:   bsif alw #brp
+        subd
+        brif !zrd #take
+        brif alw #vmnext
+vBLT:   bsif alw #brp
+        bsif alw #slt
+        brif !zrd #take
+        brif alw #vmnext
+vBGE:   bsif alw #brp
+        bsif alw #slt
+        brif zrd #take
+        brif alw #vmnext
+vBLTU:  bsif alw #brp
+        bsif alw #sltu
+        brif !zrd #take
+        brif alw #vmnext
+vBGEU:  bsif alw #brp
+        bsif alw #sltu
+        brif zrd #take
+        brif alw #vmnext
+take:   mov $IW, d              ; VPC = the branch + C
+        ldi #19, sft
+        lsld
+        asrd
+        mov $VPC, a
+        addd
+        lia #1
+        subd
+        mov d, $VPC
+        brif alw #vmnext
+
+vJAL:   mov $VPC, d             ; x[A] = the return address, VPC = the jump + bits 17:0 (J: A = 0)
+        ldi #2, sft
+        lsld
+        mov $VLK, a
+        orad
+        mov d, $VT
+        mov $IW, d
+        ldi #14, sft
+        lsld
+        asrd
+        mov $VPC, a
+        addd
+        lia #1
+        subd
+        mov d, $VPC
+        mov $VT, d
+        brif alw #wx
+vJALR:  bsif alw #xbi           ; VPC = word of x[B] + C, x[A] = the return address (JR: A = 0)
+        addd
+        bsif alw #bword
+        mov d, $VT
+        mov $VPC, d
+        ldi #2, sft
+        lsld
+        mov $VLK, a
+        orad
+        mov $VT, a
+        mov a, $VPC
+        brif alw #wx
+
+vFADD:  bsif alw #fbc
+        fadd
+        brif alw #wf
+vFSUB:  bsif alw #fbc
+        fsbd
+        brif alw #wf
+vFMUL:  bsif alw #fbc
+        mov d, b
+        fml
+        mov p, d
+        brif alw #wf
+vFDIV:  bsif alw #fbc           ; the kernel's divide (io = the tables meanwhile)
+        mov d, $T0
+        ldi #0, b
+        mov b, rf3
+        bsif alw #divp
+        ldi #0x400000, b
+        mov b, rf3
+        brif alw #wf
+vFSQRT: bsif alw #fbc           ; sqrt(+-0) = +-0, sqrt(x < 0) = NaN as on cpres1
+        mov d, $VT
+        fabd
+        mov $VT, d
+        brif zrd #wf
+        lia #0
+        orad
+        brif !ged #fnan
+        ldi #0, b
+        mov b, rf3
+        bsif alw #sqrtd
+        ldi #0x400000, b
+        mov b, rf3
+        mov p, d
+        brif alw #wf
+vFMOV:  bsif alw #fbc
+        brif alw #wf
+vFNEG:  bsif alw #fbc
+        mov $VSG, a
+        eord
+        brif alw #wf
+vFABS:  bsif alw #fbc
+        fabd
+        brif alw #wf
+vFLT:   bsif alw #fbc
+        fcpd
+        brif ged #v0
+v1:     ldi #1, d
+        brif alw #wx
+vFLE:   bsif alw #fbc
+        fcpd
+        brif led #v1
+v0:     ldi #0, d
+        brif alw #wx
+vFEQ:   bsif alw #fbc
+        fcpd
+        brif zrd #v1
+        brif alw #v0
+vFCVTWS: bsif alw #fbc          ; truncates (stmh fp rz)
+        cfxd
+        brif alw #wx
+vFCVTSW: bsif alw #xbc
+        cxfd
+        brif alw #wf
+vFMAX:  bsif alw #fbc
+        fcpd
+        brif ged #wf
+        mov a, d
+        brif alw #wf
+vFMVXW: bsif alw #fbc
+        brif alw #wx
+vFMVWX: bsif alw #xbc
+        brif alw #wf
+
+vIN:    mov rf1, d
+        brif alw #wx
+vOUT:   bsif alw #xbc
+        mov d, rf2
+        brif alw #vmnext
+vSIN:   bsif alw #xbc
+        ldi #0, b
+        mov b, rf3              ; io = the tables
+        mov d, $0x20 (e)
+        mov $0x20 (e), d
+        ldi #0x400000, b
+        mov b, rf3
+        brif alw #wx
+vCOS:   bsif alw #xbc
+        ldi #0, b
+        mov b, rf3
+        mov d, $0x20 (e)
+        mov $0x21 (e), d
+        ldi #0x400000, b
+        mov b, rf3
+        brif alw #wx
+vIRD:   bsif alw #xbc           ; x[A] = data RAM[x[B]]
+        mov d, x1
+        mov (x1), d
+        brif alw #wx
+vIWR:   bsif alw #xbc           ; data RAM[x[B]] = x[C]
+        mov d, x1
+        mov a, (x1)
+        brif alw #vmnext
+vPUSH:  bsif alw #pushs
+        brif alw #vmnext
+vPOP:   bsif alw #pops
+        brif alw #vmnext
+vRSQRT: bsif alw #xbc           ; 1/sqrt(x[B]); 0 for 0, NaN for x < 0 (cpres1 _L2029B)
+        lia #0
+        orad
+        brif zrd #wx
+        brif !ged #xnan
+        ldi #0, b
+        mov b, rf3
+        bsif alw #rsqrtd
+        ldi #0x400000, b
+        mov b, rf3
+        brif alw #wx
+xnan:   ldi #16, sft            ; x[A] = 0xffc00000, the NaN the SHARC and cop_ext give
+        lid #0xffc0
+        lsld
+        brif alw #wx
+fnan:   ldi #16, sft
+        lid #0xffc0
+        lsld
+        brif alw #wf
+vHALT:  ldi #0, d               ; back to the command loop, io = the tables
+        mov d, rf3
+        brif alw #loop
+
+; one entry per op, in tools/rv2cvm.py's OPS order
+vtab:   brif alw #vmnext        ; NOP
+        brif alw #vLI
+        brif alw #vADD
+        brif alw #vSUB
+        brif alw #vAND
+        brif alw #vOR
+        brif alw #vXOR
+        brif alw #vSLL
+        brif alw #vSRL
+        brif alw #vSRA
+        brif alw #vSLT
+        brif alw #vSLTU
+        brif alw #vADDI
+        brif alw #vANDI
+        brif alw #vORI
+        brif alw #vXORI
+        brif alw #vSLLI
+        brif alw #vSRLI
+        brif alw #vSRAI
+        brif alw #vSLTI
+        brif alw #vSLTIU
+        brif alw #vLW
+        brif alw #vSW
+        brif alw #vLBU
+        brif alw #vSB
+        brif alw #vFLW
+        brif alw #vFSW
+        brif alw #vBEQ
+        brif alw #vBNE
+        brif alw #vBLT
+        brif alw #vBGE
+        brif alw #vBLTU
+        brif alw #vBGEU
+        brif alw #vJAL          ; JAL
+        brif alw #vJAL          ; J
+        brif alw #vJALR         ; JALR
+        brif alw #vJALR         ; JR
+        brif alw #vFADD
+        brif alw #vFSUB
+        brif alw #vFMUL
+        brif alw #vFDIV
+        brif alw #vFSQRT
+        brif alw #vFMOV
+        brif alw #vFNEG
+        brif alw #vFABS
+        brif alw #vFLT
+        brif alw #vFLE
+        brif alw #vFEQ
+        brif alw #vFCVTWS
+        brif alw #vFCVTSW
+        brif alw #vFMAX
+        brif alw #vFMVXW
+        brif alw #vFMVWX
+        brif alw #vIN
+        brif alw #vOUT
+        brif alw #vSIN
+        brif alw #vCOS
+        brif alw #vIRD
+        brif alw #vIWR
+        brif alw #vPUSH
+        brif alw #vPOP
+        brif alw #vRSQRT
+        brif alw #vHALT
+
 ; ---- dispatch: one entry per command number 0x00..0xff ----------------------------------------
 .equ NONE, loop
 table:
-        brif alw #NONE          ; 00
+        brif alw #init          ; 00 INIT
         brif alw #push          ; 01 PUSH
         brif alw #pop           ; 02 POP
         brif alw #ident         ; 03 IDENTITY
-        brif alw #NONE          ; 04
+        brif alw #ldmat         ; 04 LMATRIX
         brif alw #rmat          ; 05 RMATRIX
         brif alw #setpos        ; 06 SET_POS
         brif alw #scale         ; 07 SCALE
         brif alw #angx          ; 08 ANG_X
         brif alw #angy          ; 09 ANG_Y
         brif alw #angz          ; 0a ANG_Z
-        brif alw #NONE          ; 0b
-        brif alw #NONE          ; 0c
-        brif alw #NONE          ; 0d
-        brif alw #NONE          ; 0e
-        brif alw #NONE          ; 0f
-        brif alw #NONE          ; 10
-        brif alw #NONE          ; 11
-        brif alw #NONE          ; 12
+        brif alw #vm            ; 0b
+        brif alw #vm            ; 0c
+        brif alw #vm            ; 0d
+        brif alw #vm            ; 0e
+        brif alw #vm            ; 0f
+        brif alw #vm            ; 10
+        brif alw #vm            ; 11
+        brif alw #vm            ; 12
         brif alw #fadd          ; 13 FADD
         brif alw #fsub          ; 14 FSUB
         brif alw #fmul          ; 15 FMUL
         brif alw #fdiv          ; 16 FDIV
         brif alw #int2f         ; 17 INT2F
         brif alw #f2int         ; 18 F2INT
-        brif alw #NONE          ; 19
+        brif alw #vm            ; 19
         brif alw #sqrt          ; 1a SQRT
-        brif alw #NONE          ; 1b
-        brif alw #NONE          ; 1c
-        brif alw #NONE          ; 1d
-        brif alw #NONE          ; 1e
-        brif alw #NONE          ; 1f
-        brif alw #NONE          ; 20
+        brif alw #vm            ; 1b
+        brif alw #vm            ; 1c
+        brif alw #vm            ; 1d
+        brif alw #vm            ; 1e
+        brif alw #vm            ; 1f
+        brif alw #vm            ; 20
         brif alw #sin           ; 21 SIN
         brif alw #cos           ; 22 COS
         brif alw #tan           ; 23 TAN
         brif alw #sinsc         ; 24 SINSCALE
         brif alw #cossc         ; 25 COSSCALE
-        brif alw #NONE          ; 26
-        brif alw #NONE          ; 27
-        brif alw #NONE          ; 28
-        brif alw #NONE          ; 29
-        brif alw #NONE          ; 2a
+        brif alw #vm            ; 26
+        brif alw #vm            ; 27
+        brif alw #vm            ; 28
+        brif alw #vm            ; 29
+        brif alw #vm            ; 2a
         brif alw #dist2d        ; 2b DIST2D
         brif alw #dist3d        ; 2c DIST3D
         brif alw #mag2d         ; 2d MAG2D
-        brif alw #NONE          ; 2e
+        brif alw #vm            ; 2e
         brif alw #atan2         ; 2f ATAN2
-        brif alw #NONE          ; 30
-        brif alw #NONE          ; 31
-        brif alw #NONE          ; 32
+        brif alw #vm            ; 30
+        brif alw #vm            ; 31
+        brif alw #vm            ; 32
         brif alw #NONE          ; 33
-        brif alw #NONE          ; 34
-        brif alw #NONE          ; 35
-        brif alw #NONE          ; 36
-        brif alw #NONE          ; 37
-        brif alw #NONE          ; 38
-        brif alw #NONE          ; 39
-        brif alw #NONE          ; 3a
-        brif alw #NONE          ; 3b
+        brif alw #vm            ; 34
+        brif alw #vm            ; 35
+        brif alw #vm            ; 36
+        brif alw #vm            ; 37
+        brif alw #vm            ; 38
+        brif alw #vm            ; 39
+        brif alw #vm            ; 3a
+        brif alw #vm            ; 3b
         brif alw #NONE          ; 3c
-        brif alw #NONE          ; 3d
-        brif alw #NONE          ; 3e
-        brif alw #NONE          ; 3f
+        brif alw #vm            ; 3d
+        brif alw #vm            ; 3e
+        brif alw #vm            ; 3f
         brif alw #NONE          ; 40
-        brif alw #NONE          ; 41
-        brif alw #NONE          ; 42
-        brif alw #NONE          ; 43
-        brif alw #NONE          ; 44
-        brif alw #NONE          ; 45
-        brif alw #NONE          ; 46
-        brif alw #NONE          ; 47
-        brif alw #NONE          ; 48
-        brif alw #NONE          ; 49
-        brif alw #NONE          ; 4a
+        brif alw #vm            ; 41
+        brif alw #vm            ; 42
+        brif alw #vm            ; 43
+        brif alw #vm            ; 44
+        brif alw #vm            ; 45
+        brif alw #vm            ; 46
+        brif alw #vm            ; 47
+        brif alw #vm            ; 48
+        brif alw #vm            ; 49
+        brif alw #vm            ; 4a
         brif alw #NONE          ; 4b
         brif alw #NONE          ; 4c
         brif alw #NONE          ; 4d
         brif alw #NONE          ; 4e
         brif alw #NONE          ; 4f
         brif alw #NONE          ; 50
-        brif alw #NONE          ; 51
+        brif alw #vm            ; 51
         brif alw #NONE          ; 52
         brif alw #NONE          ; 53
-        brif alw #NONE          ; 54
-        brif alw #NONE          ; 55
-        brif alw #NONE          ; 56
-        brif alw #NONE          ; 57
-        brif alw #NONE          ; 58
+        brif alw #vm            ; 54
+        brif alw #vm            ; 55
+        brif alw #vm            ; 56
+        brif alw #vm            ; 57
+        brif alw #vm            ; 58
         brif alw #dot2d         ; 59 DOT2D
-        brif alw #NONE          ; 5a
-        brif alw #NONE          ; 5b
+        brif alw #vm            ; 5a
+        brif alw #vm            ; 5b
         brif alw #add3          ; 5c ADD3
         brif alw #sub3          ; 5d SUB3
         brif alw #scale3        ; 5e SCALE3
-        .fill 0x78 - 0x5f, brif alw #NONE   ; 5f..77
+        brif alw #NONE          ; 5f
+        brif alw #NONE          ; 60
+        brif alw #NONE          ; 61
+        brif alw #vm            ; 62
+        brif alw #vm            ; 63
+        brif alw #NONE          ; 64
+        brif alw #NONE          ; 65
+        brif alw #NONE          ; 66
+        brif alw #vm            ; 67
+        brif alw #vm            ; 68
+        brif alw #vm            ; 69
+        brif alw #vm            ; 6a
+        brif alw #vm            ; 6b
+        brif alw #NONE          ; 6c
+        brif alw #NONE          ; 6d
+        brif alw #NONE          ; 6e
+        brif alw #NONE          ; 6f
+        brif alw #vm            ; 70
+        brif alw #vm            ; 71
+        brif alw #vm            ; 72
+        brif alw #vm            ; 73
+        brif alw #vm            ; 74
+        brif alw #vm            ; 75
+        brif alw #vm            ; 76
+        brif alw #vm            ; 77
         brif alw #submit        ; 78 SUBMIT
-        .fill 0x100 - 0x79, brif alw #NONE  ; 79..ff
+        brif alw #vm            ; 79
+        brif alw #vm            ; 7a
+        brif alw #vm            ; 7b
+        brif alw #vm            ; 7c
+        brif alw #vm            ; 7d
+        brif alw #vm            ; 7e
+        brif alw #vm            ; 7f
+        brif alw #vm            ; 80
+        brif alw #vm            ; 81
+        brif alw #vm            ; 82
+        brif alw #vm            ; 83
+        brif alw #vm            ; 84
+        brif alw #vm            ; 85
+        brif alw #vm            ; 86
+        brif alw #vm            ; 87
+        .fill 0x100 - 0x88, brif alw #NONE ; 88..ff

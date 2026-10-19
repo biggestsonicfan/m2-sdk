@@ -36,11 +36,18 @@
 /* Display-list build buffer. Sized to hold many objects in one list (e.g. the
    ice-cube physics demo): bufferram has 0x4000 u32 free past read_start=0x10000,
    and each object_data is ~18 words, so 0x1000 holds ~220 objects. */
-static u32 g_geo[0x2000];
+/* One display-list buffer: 0x2000 words, or 0x1000 when the COP VM owns the upper half of buffer
+ * RAM (M2_COP_EXT on 2A/2C, m2_3d.h). */
+#if defined(M2_COP_EXT) && !M2_BOARD_SHARC
+#define GEO_BUF_WORDS   0x1000u
+#else
+#define GEO_BUF_WORDS   0x2000u
+#endif
+static u32 g_geo[GEO_BUF_WORDS];
 static u32 g_geo_n;
 
 static u32  geo__f(float f) { union { float f; u32 u; } x; x.f = f; return x.u; }
-static void geo__w(u32 v)   { if (g_geo_n < 0x2000) g_geo[g_geo_n++] = v; }
+static void geo__w(u32 v)   { if (g_geo_n < GEO_BUF_WORDS) g_geo[g_geo_n++] = v; }
 
 static void geo_begin(void) { g_geo_n = 0; }
 
@@ -323,7 +330,7 @@ static void geo_flush(u32 read_start) {
  * END register is just the END opcode (0x07800f0f) — already our geo_end() word. */
 /* GEO_CTL_REG / GEO_WRITE_REG / GEO_ZCLIP_REG: m2_constants.h (the hardware map). */
 #define GEO_NBUF        4u
-static const u32 geo_buf_off[GEO_NBUF] = { 0x00000u, 0x08000u, 0x10000u, 0x18000u };
+static const u32 geo_buf_off[GEO_NBUF] = { 0u, GEO_BUF_WORDS * 4u, GEO_BUF_WORDS * 8u, GEO_BUF_WORDS * 12u };
 static u32 g_geo_buf;                  /* current build buffer (0..3)             */
 
 /* GEO_RELATED config table — STF geo_func @0x1550 uploads these 64 halfwords into
@@ -361,7 +368,7 @@ static void geo_func(void) {
 static void geo_buffram_clear(void) {
     volatile u32 *buf = (volatile u32 *)GEO_BUFFERRAM;
     u32 i, b;
-    for (i = 0; i < 0x8000u; i++) buf[i] = 0u;
+    for (i = 0; i < GEO_NBUF * GEO_BUF_WORDS; i++) buf[i] = 0u;
     for (b = 0; b < GEO_NBUF; b++)
         *(volatile u32 *)(GEO_BUFFERRAM + geo_buf_off[b]) = GEO_OP_END;
 }
@@ -424,7 +431,8 @@ static void geo_flush_flip(void) {
  * counter) are M2_MEM.<field> — see m2_memory.h (pulled in via m2.h). */
 
 static const u32 geo_buff_ram_adds[GEO_NBUF] = {
-    0x900000u, 0x908000u, 0x910000u, 0x918000u    /* STF BUFF_RAM_ADDS */
+    GEO_BUFFERRAM + 0u * GEO_BUF_WORDS * 4u, GEO_BUFFERRAM + 1u * GEO_BUF_WORDS * 4u,   /* STF BUFF_RAM_ADDS */
+    GEO_BUFFERRAM + 2u * GEO_BUF_WORDS * 4u, GEO_BUFFERRAM + 3u * GEO_BUF_WORDS * 4u
 };
 
 /* STF change_poly_bank @0x3534: cache the COP poly bank (low byte of GEO_CTL_REG). */
@@ -588,6 +596,6 @@ static void geo_material_init(void) {
 
 /* Flush an empty list so the GEO renders nothing (clears the 3D plane, e.g. when
    a 3D game returns to the 2D launcher menu). */
-static void geo_clear(void) { geo_begin(); geo_end(); geo_flush(0x10000u); }
+static void geo_clear(void) { geo_begin(); geo_end(); geo_flush(GEO_BUF_WORDS * 8u); }
 
 #endif /* M2_GEO_H */

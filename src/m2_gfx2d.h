@@ -38,6 +38,11 @@
 
 /* ---- low-level GEO display list (direct_data) ---------------------------- */
 #define G2D_BUFFERRAM   0x00900000u
+#if defined(M2_COP_EXT) && !M2_BOARD_SHARC
+#define G2D_LIST_OFF    0x00000u     /* the COP VM owns buffer RAM 0x10000.. (m2_3d.h M2_COP_EXT) */
+#else
+#define G2D_LIST_OFF    0x10000u     /* buffer RAM offset of the display list */
+#endif
 #define G2D_READ_REG    0x00803008u
 #define G2D_OP_DIRECT   0x01000202u
 #define G2D_OP_TEXDATA  0x02000404u
@@ -357,11 +362,11 @@ static void g2d_ttext(float x, float y, const char *s, u32 cb) {
 
 /* Submit the frame to the GEO (it rasterizes on the next vblank). */
 static void g2d_end(void) {
-    volatile u32 *buf = (volatile u32 *)(G2D_BUFFERRAM + 0x10000u);
+    volatile u32 *buf = (volatile u32 *)(G2D_BUFFERRAM + G2D_LIST_OFF);
     u32 i;
     g2d__w(G2D_OP_END);
     for (i = 0; i < g2d__n; i++) buf[i] = g2d__buf[i];
-    *(volatile u32 *)G2D_READ_REG = 0x10000u;
+    *(volatile u32 *)G2D_READ_REG = G2D_LIST_OFF;
 }
 
 /* Submit an empty frame to wipe the polygon plane (e.g. before handing the screen

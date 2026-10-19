@@ -53,8 +53,10 @@ Supported commands. Argument order and results are the same as cpres1:
 | Matrix | `IDENTITY` `SET_POS` `SCALE` `ANG_X` `ANG_Y` `ANG_Z` `RMATRIX` `PUSH` `POP` |
 | Display list | `SUBMIT` |
 
-Any other command is ignored. Its arguments are then read as commands, so don't send
-one on 2A. `m2_fastmath.h` (the default) does the scalar math on the i960 and works on
+Every other cpres1 command (bones, motion curves, collision, afterimages, …) runs on 2A
+and 2C too when you build with `M2_COP_EXT`: see [Every cpres1 command](#every-cpres1-command-m2_cop_ext)
+below. Without it the kernels ignore those commands, and their arguments are then read as
+commands. `m2_fastmath.h` (the default) does the scalar math on the i960 and works on
 every board.
 
 ### The matrix commands
@@ -79,7 +81,7 @@ its jump's delay slots, so the depth goes on counting past a full stack. A `PUSH
 7 or more changes only the count, and so does a `POP` at depth 8 or more. After 8 pushes
 the first `POP` leaves the matrix as it is. A `POP` at depth 0 does nothing.
 
-Still missing on 2A: `WMATRIX` and the bone commands.
+`WMATRIX` and the bone commands run in the VM (`M2_COP_EXT`, below).
 
 ### SUBMIT
 
@@ -185,8 +187,9 @@ header.
 
 On 2C the COP runs the SDK's own TGPx4 (Fujitsu MB86235) program,
 `src/m2_tgpx4_kernel.s`. It has the same commands as the 2A kernel (the cpres1 math and
-matrix commands, PUSH/POP, SUBMIT, ATAN2) and the same command word: the kernel reads
-bits 30:23.
+matrix commands, PUSH/POP, SUBMIT, ATAN2, and the VM for the rest) and the same command
+word: the kernel reads bits 30:23. It also does `0x00` (initialise: as cpres1, the matrix
+goes back to the bottom stack slot and the stack empties) and `0x04` (`WMATRIX`) natively.
 
 `m2_cop_boot()` uploads it (model2.cpp `copro_ctl1_w`, `model2c_state::copro_fifo_w`):
 set bit 31 of the control register at 0x980000 (that resets the upload counter), write
@@ -254,6 +257,85 @@ The self-test on Dynamite Cop's 2C program (4096 words) disassembles and reassem
 word exactly. An absolute address must fit its form's field (the table above), or the
 assembler stops with an error. `src/m2_tgpx4_kernel.h` is generated from the `.s`.
 
+## Every cpres1 command: `M2_COP_EXT`
+
+The SDK is meant to reach all of the hardware, so the 2A and 2C kernels answer every
+command cpres1 has, not just the ones the SDK's own 3D path sends. The ones they have no
+native code for run in a small virtual machine inside each kernel:
+
+```c
+#define M2_COP_EXT          /* before the SDK headers */
+#include "m2.h"
+#include "m2_3d.h"
+...
+m2_cop_boot();             /* uploads the kernel, then the VM program */
+```
+
+On 2B the define changes nothing: cpres1 has those commands already.
+
+**What runs where.** The kernels keep their native commands (the tables above). Every other
+command from 0x00 to 0x87 runs in the VM, except the ones cpres1 itself ignores (0x33, 0x3c,
+0x40, 0x4b-0x50, 0x52, 0x53, 0x5f-0x61, 0x64-0x66, 0x6c-0x6f). 0x88-0xff are ignored.
+Argument order, argument count and results are cpres1's. So is the FIFO protocol: the VM
+reads its arguments from the input FIFO and writes its results to the output FIFO itself.
+
+**The program.** `src/cop_ext/` is m2-hle2's C model of cpres1 (`src/board/sharc*.h`: the
+command switch, collision, the afterimage ring, atan2, the reciprocal table). Each file says
+where it came from. `ext.inc` adds the cpres1 commands m2-hle2 has no case for (stf-sharc
+`cpres1.asm`). `compat.h` maps the model's SHARC data memory onto plain arrays and its
+FIFO, sin/cos, matrix and stack onto VM natives. One change from m2-hle2: command 0x32 runs
+its cubic for any span, as cpres1 does (m2-hle2 returns v0 when span <= 0; `sfight`
+disagrees). That fix is worth sending to m2-hle2.
+
+`src/cop_ext/build.sh` compiles it with clang-18 for RV32IF (`-Oz`, no multiply/divide:
+`compat.h` has `__mulsi3` and friends), links it with ld.lld-18 (`vm.ld`) and turns it into
+`src/m2_cop_ext_image.h` with `tools/rv2cvm.py`. That tool translates each RISC-V
+instruction into one 32-bit VM word: op 30:23 (63 ops, from `NOP` to `HALT`), A 22:18,
+B 17:13, C 12:0. The kernels decode those fields cheaply, with shifts and masks. The header
+is checked in, so a normal build doesn't need clang. To rebuild it: `apt install clang-18
+lld-18 llvm-18`.
+
+**Natives.** `IN`, `OUT` (the FIFOs), `SIN`, `COS` (the kernel's own sine, as its
+`SIN`/`COS` commands), `IRD`, `IWR` (the kernel's matrix), `PUSH`, `POP` (the kernel's
+matrix stack), `RSQRT` and `HALT` (back to the command loop). The C reads the matrix in on
+entry and writes it back at the end, so native and VM commands share one matrix and one
+stack.
+
+**Memory.** The program, its data and stack live in buffer RAM words 0x4000-0x7d7f (i960
+0x910000-0x91f5ff; `_start` is word 0x4001), which the COP reaches on both boards (2A: `rf3` = 0x400000 banks io
+onto buffer RAM; 2C: the external bus at EB = 0x400000). With `M2_COP_EXT` on 2A/2C the GEO
+display-list buffers shrink to the lower half (`m2_geo.h`: four buffers of 0x1000 words
+instead of 0x2000), and `m2_gfx2d.h` puts its list at offset 0. The VM's registers are
+internal RAM (2A: data RAM 0x00-0x3f; 2C: A RAM 0x300-0x33f). Commands that read or write
+buffer RAM themselves (0x4a's osage records, the 0x67-0x69 matrices, and any cpres1 data
+address that lands there) reach all of it except the VM's own words.
+
+`m2_cop_ext_upload()` writes the program and zeroes its `.bss`. Image word 0 (buffer RAM
+word 0x4000) is a mark, "M2VM" (0x4d32564d, `tools/rv2cvm.py`). A kernel runs a VM command
+only when the mark is there. Without `M2_COP_EXT` that word belongs to a display list, so
+the kernel ignores the command and doesn't jump into display-list words. The VM's own data
+writes can't reach the mark.
+
+**Speed.** Every VM instruction is a fetch, a decode and a handler on the COP. In the
+`stftest` cases (seed 1, `tools/cvm.py`) a command runs a median of about 800 VM
+instructions, 90% of them under 2,900. A collision command over many units runs far more
+(0x70: 400,000 in one case). That is fine for a few calls a frame, not for every vertex.
+`stftest` (below) sends 630 commands in 413 frames on `sfight`, 543 on `dynamcopc` and 672
+on `dynamcop`.
+
+**Checking the VM without a board.** `tools/cvm.py` is a reference interpreter for the
+bytecode with the same natives. `src/cop_ext/build.sh --check DIR` also builds the C
+natively (`host.c`, the "host model"), generates four seeds of random cases
+(`tools/cop_ext_gen.py`) and checks that the host model and `cvm.py` agree on every word.
+NaN sign bits are the only expected difference.
+
+**The MAME fix it needed.** Comparing with `sfight` showed every matrix that cpres1 copies
+with its dual-move loop (command 0x0b, PM 0x203F6) landing one word early in MAME. The
+SHARC recompiler stored a dual move's new register value instead of the old one when the
+instruction had no compute. The fix is on the fork's branch `sharc-drc-dual-move`
+(`sharc: a dual move keeps the stored register when the PM read replaces it`), merged
+into `shared`. Older MAMEs give wrong results for 0x0b on `sfight` itself.
+
 ## Test: `src/coptest.c`
 
 `-DM2_GAME=coptest` sends each supported command through the COP and compares the result
@@ -300,3 +382,78 @@ the i960 sent before that is lost and the i960 then waits for an answer that nev
 On `dynamcopc`, the shared MAME and m2-hle2 show thirteen OK lines and ALL ABSOLUTE MODES
 OK. MAME without the fork branch stops at the first absolute operand. The results are also in
 `g_abs_result[]`, `g_abs_bad` and `g_abs_done` for a debugger or a Lua script.
+
+## Test: `src/stftest.c` (every command, every board)
+
+`-DM2_GAME=stftest` sends a list of cases through the COP: a matrix, then each cpres1
+command with random arguments, three times over (630 cases, 105 commands), then an
+afterimage sequence (522 cases). After each case
+it reads the results, then the matrix (`RMATRIX`), then anything more the COP sends, and
+keeps them in `g_stf_out[]`. Nothing is drawn or printed. The cases come from
+`src/stftest_cases.h`:
+
+```sh
+src/cop_ext/build.sh --check /tmp/w                     # t1..t4.txt cases, h1..h4.txt host model
+python3 tools/stftest_gen.py /tmp/w/t1.txt /tmp/w/h1.txt > src/stftest_cases.h
+cmake -B b2A ... -DM2_BOARD=2A -DM2_GAME=stftest && cmake --build b2A   # and 2B, 2C
+```
+
+Run each build in MAME with `-autoboot_script tools/stftest_dump.lua`. It writes
+`g_stf_out` to `$STF_OUT` once the cases are done. Its environment variables are in its
+header, and the addresses are in the build's `game.map`. Then compare any two runs, or a
+run with the host model:
+
+```sh
+python3 tools/stftest_cmp.py /tmp/w/t1.txt out2A.txt /tmp/w/h1.txt     # -v lists every difference
+```
+
+The afterimage sequence fills the ring the way a fighter does: 0x81, the spacing and life
+(0x49 to DM 0x32181/0x32182), every unit matrix of both players (0x35) and the previous
+frame's (0x7f), then 8 frames of 0x80 per player with 1-16 parts (4 + 4n + 2 words in,
+n + 1 out; frame 5 teleports player 0), each followed by 0x7f, then per frame 0x82, six
+0x85, 0x83, 0x84, now and then 0x87 and once 0x86, and at the end 0x85 on all 128 slots.
+`stftest` streams 0x80 as STF's `zanzou_control` (i960 0x8AB10) does: each part's answer
+is read before the next part goes in, since 2A and 2C have 8-word FIFOs (MAME `model2.cpp`).
+
+A word matches exactly, is close (floats within 1e-4 relative or 1e-5 absolute), or differs.
+Results with the shared MAME, seed 1 (1,152 cases, 15,260 words):
+
+| | exact | close | differ |
+|---|---|---|---|
+| `dynamcop` (2A) vs host | 15190 | 66 | 4 |
+| `dynamcopc` (2C) vs host | 15078 | 178 | 4 |
+| `sfight` (cpres1) vs host | 13374 | 1877 | 9 |
+| `dynamcopc` vs `dynamcop` | 15089 | 168 | 3 |
+
+(The random cases alone, seeds 1-3, before the afterimage sequence: 2A 1-4 words differ,
+2C 2-4, `sfight` 6-14, of about 7,980.)
+
+"Close" is the boards' sine, divide and square root differing in the last bits: the
+host model computes them in double, each COP with its own seeds and tables. The words that
+differ are edge cases, the same on 2A and 2C, where each COP gives its own answer:
+
+- 0x19 (1/sqrt) of a denormal. For 0x90: host 2.2e21, 2A 1.3e19, 2C inf, cpres1 4.4e19.
+- 0x28 (`Fn_tri_shin`) with a denormal side: a divide by almost 0, then an angle of a value
+  far outside [-1, 1].
+- 0x31 (a + (b - a)·t / span) with a span of 0 or a denormal: a divide by (almost) zero.
+
+`sfight` differs from the model in the same places, also in 0x28 when the three sides make
+no triangle (the square root of a negative), and on seed 2 in nine 0x7c (afterimage) words.
+
+The afterimage sequence matches on 2A and 2C word for word, and on `sfight` every word is
+exact or close (within 2e-6: cpres1's own sine for 0x80's turn). Two bugs, both fixed:
+
+- The model never set DM 0x30301, the 1.0 cpres1's reset writes (PM 0x20080: 0, 1.0, 2.0
+  from 0x30300). 0x80 reads it as the step between copies, so each part laid one copy,
+  not one per spacing: ring words 0-6 and the matrices of all later slots were wrong.
+  `src/cop_ext/compat.h` now holds the three constants.
+- MAME: 0x83 (`Fn_zanzou_load_matrix_inner`) loaded 12 zeros into the current matrix, and
+  0x84 and 0x87 used the same wrong words. They read and write the ring's matrix over the PM
+  bus (`pm(i8,m9)`, i8 = 0x32314 + 0x20n), and 0x80 stores it over DM. cpres1's init
+  writes SYSCON 0xa100 (`dm(0)`; the i960's boot writes 0xa100/0xa110 too): IMDW0 (bit 8)
+  set, IMDW1 (bit 9) clear (ADI `def21060.h`: `IMDW0X 0x100`, `IMDW1X 0x200`). So block 1
+  holds 32-bit data and both buses reach the same word. MAME read every 32-bit PM access
+  through its packed 48-bit view. Fixed on the fork's `sharc-pm-block1` branch, merged into
+  `shared`: a 32-bit PM data access to block 1 uses the DM word when IMDW1 is clear. Block 0
+  keeps the packed view: it holds the program, IMDW0 makes it a 40-bit block, and cpres1's
+  `pm(0x21f18)` writes would land on instruction words in MAME's layout.
