@@ -3,7 +3,9 @@
 At `-O2` the SDK's compiler can put a `cmpi`/`cmpo` before a `bbs` or `bbc` and then
 branch on that compare after the `bbs`/`bbc`. On the i960, `bbs` and `bbc` overwrite the
 condition code, so the later branch tests the bit instead of the compare. The cause is in
-the compiler's i960 backend; the SDK's code is fine. This bug is not fixed yet.
+the compiler's i960 backend; the SDK's code is fine. The toolchain isn't fixed yet; a
+tested backend patch is below, filed upstream as
+[DrItanium/gcc-i960-11.3.0#1](https://github.com/DrItanium/gcc-i960-11.3.0/issues/1).
 
 ## Symptom
 
@@ -19,15 +21,15 @@ if (m2_start() & (player ? 2u : 1u)) r |= M2_START;
 `inputtest` (`i960-elf-objdump -d`):
 
 ```
-1864: cmpi   g6,0        # cc = compare(player, 0)
-1868: bbs    5,g4,1878   # START2 not held: branch. bbs also sets cc.
-186c: be     187c        # START2 held: tests the bbs cc, not player
-1870: setbit 7,g0,g0
-1874: b      1898
-1878: bne    1898        # meant to test "player != 0"; cc is "equal" after a taken bbs
-187c: cmpi   g5,0        # so P2 falls into the START1 test
-1880: bne    1898
-1884: setbit 7,g0,g0     # M2_START
+13c4: cmpi   g6,0        # cc = compare(player, 0)
+13c8: bbs    5,g4,13d8   # START2 not held: branch. bbs also sets cc.
+13cc: be     13dc        # START2 held: tests the bbs cc, not player
+13d0: setbit 7,g0,g0
+13d4: b      13f8
+13d8: bne    13f8        # meant to test "player != 0"; cc is "equal" after a taken bbs
+13dc: cmpi   g5,0        # so P2 falls into the START1 test
+13e0: bne    13f8
+13e4: setbit 7,g0,g0     # M2_START
 ```
 
 ## The toolchain
@@ -118,7 +120,14 @@ instructions in `i960.md` and `peepholes.md` that are missing the clobber.
    ```
 
    Then rebuild the toolchain with `build-i960-toolchain.sh` (`GCC_REV` set to the
-   patched commit). This patch has not been built or tested yet.
+   patched commit). Tested 2026-10-19 with a C-only `make all-gcc` of the fork with the
+   clobber added to all four patterns. The build passed, including GCC's selftests.
+   - The reproducer now redoes the compare on each path:
+     `bbs 5,g1,.L2; cmpi g0,0; be .L7; ...; .L2: cmpi g0,0; bne .L6`.
+   - All 15 programs in `src/` (2B, plus `abstest` for 2C) compile. In each one the only
+     change is the bad pair in `m2_input`, 3 lines of assembly.
+   - `inputtest` in MAME (sfight) with START1 held: the stock compiler gives
+     `dec 018080` (M2_START on P1 and P2); the patched one gives `dec 010080` (P1 only).
 2. **A flag.** Add `-fno-crossjumping` (or one of the other three) to the SDK's
    flags. It is cheap, but it only makes the bug less likely; see above.
 3. **Rewrite the C at the affected spot.** For example, pick the bit by `player` first
@@ -134,9 +143,10 @@ i960-elf-objdump -d build/game.elf |
   awk '/\tcmp[io][^b]/ {c = NR; l = $0; next} /\tbb[sc]\t/ && NR == c + 1 {print l; print}'
 ```
 
-In `inputtest` that finds only `m2_input`. A pair isn't always wrong: it is wrong when a
+Every program in `src/` has exactly one pair, in `m2_input`. A pair isn't always wrong: it is wrong when a
 conditional branch after the `bbs`/`bbc` (on either path) still relies on the compare.
 The compare can also sit a few instructions above the `bbs`/`bbc`, which this misses.
 
 `tools/inputtest_check.lua` with `src/inputtest.c` checks the inputs. It checks P1 only
-(`dec & 0x10080`), so it passes while this bug is still present.
+(`dec & 0x10080`), so it passes while this bug is still present. The bug shows as bit
+0x8000 in `held ... dec` (`018080` instead of `010080`).
