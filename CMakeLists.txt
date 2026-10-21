@@ -110,3 +110,57 @@ add_custom_target(show-asm
     DEPENDS game.elf
     COMMENT "Disassembling ${M2_GAME} game.elf for i960-elf"
     VERBATIM)
+
+# ---- roms/<game>.gsx: the game as a geoserial app (-DM2_GSX=ON) ----------------------------
+# Uploaded over RS-422 to m2-x11's geoserial kernel (burned in place of the game) and run from
+# its manager: no EPROM burn per build. The kernel booted the board, so the app is built the way
+# m2-x11's build_app.bat builds one: src/<game>.c with M2_GSX defined (the game skips what the
+# kernel already did), src/<game>_gsx.c for the kernel's syscalls (gs_app.h), m2-x11's GSX1
+# header and entry shim, lib/app.ld at the run base 0x540000, gsx_stamp.py for the flags and
+# pair-sum. No -fleading-underscore: app.ld names __gsx_start as C spells it. 2B only (the
+# kernel's board). Upload and run it with tools/gsx_upload.py.
+option(M2_GSX "Also build roms/<game>.gsx, a geoserial app (needs m2-x11)" OFF)
+set(M2_X11 "${CMAKE_SOURCE_DIR}/../m2-x11" CACHE PATH "Path to the m2-x11 checkout (geoserial kernel)")
+if(M2_GSX)
+    if(NOT EXISTS "${M2_X11}/lib/app.ld")
+        message(FATAL_ERROR "M2_GSX: m2-x11 not found at ${M2_X11} (-DM2_X11=<path>)")
+    endif()
+    if(NOT M2_BOARD STREQUAL "2B")
+        message(FATAL_ERROR "M2_GSX: the geoserial kernel runs on Model 2B only")
+    endif()
+    set(X11B "${CMAKE_BINARY_DIR}/x11")
+    set(APP_CFLAGS -mkb -msoft-float -O2 -fno-tree-loop-distribute-patterns -fno-builtin)
+    set(M2_GSX_DEFS "" CACHE STRING "Extra -D flags for the game in the .gsx build (e.g. -DVB_TRACE)")
+    set(APP_SDK_FLAGS ${APP_CFLAGS} ${M2_GSX_DEFS} -DM2_GSX -DM2_BOARD_2B -I${CMAKE_SOURCE_DIR}/src)
+    set(APP_X11_FLAGS ${APP_CFLAGS} -I${M2_X11}/src -I${M2_X11}/src/gs -I${X11B}/temp)
+    set(GSX "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}.gsx")
+    set(GSX_SYS "${CMAKE_SOURCE_DIR}/src/${M2_GAME}_gsx.c")
+    if(NOT EXISTS "${GSX_SYS}")
+        message(FATAL_ERROR "M2_GSX: src/${M2_GAME}_gsx.c (the game's syscall wrappers) not found")
+    endif()
+    # gen_gs_api.py writes beside itself: run a copy, so m2-x11's tree is left alone
+    add_custom_command(OUTPUT ${X11B}/temp/gs_sdk.h ${X11B}/temp/gs_api_id.h ${X11B}/temp/gs_api_compat.c
+        COMMAND ${CMAKE_COMMAND} -E copy "${M2_X11}/tools/gen_gs_api.py" "${X11B}/tools/gen_gs_api.py"
+        COMMAND ${CMAKE_COMMAND} -E copy "${M2_X11}/src/gs/gs_api.list" "${X11B}/src/gs/gs_api.list"
+        COMMAND ${Python3_EXECUTABLE} "${X11B}/tools/gen_gs_api.py"
+        DEPENDS "${M2_X11}/tools/gen_gs_api.py" "${M2_X11}/src/gs/gs_api.list"
+        VERBATIM)
+    file(GLOB GSX_HEADERS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.h")   # the SDK and its tables
+    add_custom_command(OUTPUT ${GSX}
+        COMMAND ${CMAKE_C_COMPILER} ${APP_SDK_FLAGS} -c "${CMAKE_SOURCE_DIR}/src/${M2_GAME}.c" -o gsx_game.o
+        COMMAND ${CMAKE_C_COMPILER} ${APP_X11_FLAGS} -c "${GSX_SYS}" -o gsx_sys.o
+        COMMAND ${CMAKE_C_COMPILER} ${APP_X11_FLAGS} -c "${M2_X11}/src/app_hdr.c" -o app_hdr.o
+        COMMAND ${CMAKE_C_COMPILER} ${APP_X11_FLAGS} -c "${M2_X11}/src/app_start.c" -o app_start.o
+        COMMAND ${CMAKE_C_COMPILER} ${APP_X11_FLAGS} -c "${X11B}/temp/gs_api_compat.c" -o gs_api_compat.o
+        COMMAND ${CMAKE_C_COMPILER} -mkb -msoft-float -nostartfiles -nostdlib -T "${M2_X11}/lib/app.ld"
+                -o gsx_app.elf app_hdr.o app_start.o gsx_game.o gsx_sys.o gs_api_compat.o
+                -Wl,--start-group -lgcc -Wl,--end-group -Wl,-Map,gsx_app.map
+        COMMAND ${CMAKE_OBJCOPY} -O binary gsx_app.elf "${GSX}"
+        COMMAND ${Python3_EXECUTABLE} "${M2_X11}/tools/gsx_stamp.py" "${GSX}" gsx_app.elf gsx_game.o
+        COMMAND ${CMAKE_COMMAND} -E echo "BUILD OK (${M2_GAME}, geoserial app):  roms/${M2_GAME}.gsx"
+        DEPENDS src/${M2_GAME}.c ${GSX_HEADERS} ${GSX_SYS} ${X11B}/temp/gs_sdk.h ${X11B}/temp/gs_api_compat.c
+                "${M2_X11}/lib/app.ld" "${M2_X11}/src/app_hdr.c" "${M2_X11}/src/app_start.c"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        VERBATIM)
+    add_custom_target(gsx ALL DEPENDS ${GSX})
+endif()
