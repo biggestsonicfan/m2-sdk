@@ -19,8 +19,10 @@
 #define TEX_CLASSIFY_ROM 0x02300010u          /* 256 u32 symbol-classify LUT (ROM) */
 
 /* ---- scratch buffers (kernel .bss) ---- */
-static u32 g_texA[2048];      /* off_55C344 node array     */
-static u32 g_texB[512];       /* dword_55CD50 value LUT    */
+#define TEX_A_MAX 2048u
+#define TEX_B_MAX 2048u       /* StF's stage sets reach 1178 (set 4); 512 dropped six pages */
+static u32 g_texA[TEX_A_MAX]; /* off_55C344 node array     */
+static u32 g_texB[TEX_B_MAX]; /* dword_55CD50 value LUT    */
 static u32 g_texFast0[256];   /* make_huf fast table word0 */
 static u8  g_texFastH[256];   /* fast table handler tag    */
 static u16 g_texRLE[16384];   /* RLE intermediate (dword_5502F0) */
@@ -95,7 +97,7 @@ static int tex_read_header(texbr_t *b, tex_hdr_t *h) {
     h->term   = texbr_get(b, 16);
     h->nodes  = (h->nA << 1) - 1;
     g_tex_w = h->cols; g_tex_h = h->rows;      /* publish tile dims for the mip builder */
-    return (h->nodes > 2048 || h->nB > 512) ? 1 : 0;   /* guard scratch buffers */
+    return (h->nodes > TEX_A_MAX || h->nB > TEX_B_MAX) ? 1 : 0;   /* guard scratch buffers */
 }
 
 /* table-A: decode `nodes` symbols (nbitsA each) into g_texA, folding the classify LUT (ROM). */
