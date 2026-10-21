@@ -24,6 +24,13 @@
  *   cmake ... -DM2_GAME=vaporbench -DM2_BOARD=2A     run on dynamcop
  *   cmake ... -DM2_GAME=vaporbench -DM2_BOARD=2C     run on dynamcopc
  *   cmake ... -DM2_GAME=vaporbench                   run on sfight (2B, needs cpres1.h)
+ *   cmake ... -DM2_GAME=vaporbench -DM2_GSX=ON       also roms/vaporbench.gsx (below)
+ *
+ * GSX (M2_GSX): the 2B build as a geoserial app, uploaded over RS-422 to m2-x11's kernel and
+ * run from its manager instead of burned (tools/gsx_upload.py). The kernel booted the SHARCs
+ * with STF's cpres1/cpres2 already, so the app doesn't upload them again (which also keeps it
+ * under the kernel's 64 KB slot). It checks the link a few times a frame and returns to the
+ * manager on PROG_EXIT; once the ext sweep has gone round, it sends its numbers back as text.
  */
 #define M2_NO_FASTMATH   /* keep m2_cop_* on the COP: the point is to time it */
 #define M2_COP_EXT       /* 2A/2C: every other cpres1 command in the kernels' VM */
@@ -31,6 +38,26 @@
 #include "m2_obj.h"
 #include "m2_polyattr.h"
 #include "vaporbench_cases.h"
+#ifdef M2_GSX
+int  vb_gs_poll_exit(void);           /* vaporbench_gsx.c: the kernel's syscalls */
+void vb_gs_puts(const char *s);
+#endif
+#if defined(M2_GSX) && defined(VB_TRACE)
+/* -DVB_TRACE: a breadcrumb over the link before each step of the start and of the first ext
+ * sweep, so a board that hangs shows where (the last line that came through) */
+static u32 g_trace_on = 1;
+static void vb_step(const char *s, u32 v) {
+    char b[24], *p = b; int k;
+    if (!g_trace_on) return;
+    while (*s) *p++ = *s++;
+    for (k = 28; k >= 0; k -= 4) *p++ = "0123456789abcdef"[v >> k & 15u];
+    *p++ = '\r'; *p++ = '\n'; *p = 0;
+    vb_gs_puts(b);
+}
+#define VB_STEP(s, v) vb_step(s, (u32)(v))
+#else
+#define VB_STEP(s, v) ((void)0)
+#endif
 
 /* ---- board timers (0xF00000 + 4n): count down at 25 MHz from the 32-bit value written (171 s
  * from 0xFFFFFFFF); an expired timer reads 0xfffff (MAME model2.cpp timers_r). T0 times the
@@ -659,21 +686,98 @@ static void hud_text(void) {
     }
 }
 
+#ifdef M2_GSX
+/* ===================================================================== report over the link */
+static char *rp_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *rp_uint(char *p, u32 v) {
+    char d[10]; int n = 0;
+    do { d[n++] = (char)('0' + v % 10u); v /= 10u; } while (v);
+    while (n) *p++ = d[--n];
+    return p;
+}
+static char *rp_ns(char *p, u32 ns) {   /* microseconds, 2 decimals */
+    if (ns == VB_TSAT) return rp_str(p, "sat");
+    p = rp_uint(p, ns / 1000u); *p++ = '.';
+    *p++ = (char)('0' + ns % 1000u / 100u); *p++ = (char)('0' + ns % 100u / 10u);
+    return p;
+}
+static const char vb_hex[] = "0123456789abcdef";
+static void report(void) {
+    char line[96], *p;
+    u32 i, tot = 0;
+    vb_gs_puts("\r\nvaporbench: " VB_BOARD " (geoserial app), us per call\r\n");
+    for (i = 0; i < VB_NNAT; i++) {
+        p = line;
+        p = rp_str(p, g_nat_name[i]); *p++ = ' ';
+        p = rp_ns(p, g_vb_nat_ns[i]);
+        if (g_vb_nat_bad & (1u << i)) p = rp_str(p, " WRONG");
+        p = rp_str(p, (i % 3u) == 2u ? "\r\n" : "   ");
+        *p = 0; vb_gs_puts(line);
+    }
+    p = rp_str(line, "scene "); p = rp_uint(p, g_vb_scene_us); p = rp_str(p, " us, ");
+    p = rp_uint(p, g_vb_objs); p = rp_str(p, " objects, frame ");
+    p = rp_uint(p, g_vb_frame_us); p = rp_str(p, " us\r\next (cmd us):\r\n");
+    *p = 0; vb_gs_puts(line);
+    for (i = 0; i < VB_NEXT; i++) {
+        u32 n = g_vb_ext_cmd[i], ns = g_vb_ext_ns[i];
+        p = line;
+        *p++ = vb_hex[n >> 4 & 15u]; *p++ = vb_hex[n & 15u]; *p++ = ' ';
+        p = rp_ns(p, ns);
+        p = rp_str(p, (i % 6u) == 5u || i + 1u == VB_NEXT ? "\r\n" : "  ");
+        *p = 0; vb_gs_puts(line);
+        tot += ns == VB_TSAT ? 4294967u : (ns + 500u) / 1000u;
+    }
+    p = rp_str(line, "ext total "); p = rp_uint(p, tot);
+    p = rp_str(p, g_vb_nat_bad ? " us\r\nvaporbench: done, NATIVE ANSWERS WRONG\r\n"
+                               : " us\r\nvaporbench: done, natives ALL OK\r\n");
+    *p = 0; vb_gs_puts(line);
+}
+
+/* the m2_silicon_boot steps after the firmware upload, which the kernel has done: they set up
+ * this program's own copies of the SDK's colour and display-list state */
+static void vb_gsx_boot(void) {
+    m2_color_init();
+    m2_load_poly_palette();
+    geo_func();
+    geo_initialize();
+    geometry_stuff();
+}
+
+static int vb_exit_asked(void) {   /* up to 16 link bytes a frame: a whole frame at 3 ms/byte */
+    int k;
+    for (k = 0; k < 16; k++) if (vb_gs_poll_exit()) return 1;
+    return 0;
+}
+
+int app_entry(void) {
+#else
 int main(void) {
+#endif
     u32 t = 0, tf, ts;
     int i;
+    VB_STEP("init ", 0);
     m2_init();
+#ifdef M2_GSX
+    VB_STEP("boot ", 0);
+    vb_gsx_boot();
+    vb_gs_puts("\r\nvaporbench: running; the report follows the first ext sweep (~2 s)\r\n");
+#else
     m2_silicon_boot();
+#endif
+    VB_STEP("patch ", 0);
     m2_obj_fill_patch();
+    VB_STEP("quad ", 0);
     quad_init();
     ext_index();
     colours();
+    VB_STEP("tex ", 0);
     m2_texram_fill(M2_BOARD_TEXRAM0, HUD_TX, HUD_TY, HUD_COLS * 8, HUD_ROWS * 8, 0xFu);
     m2_texram_fill(M2_BOARD_TEXRAM1, HUD_TX, HUD_TY, HUD_COLS * 8, HUD_ROWS * 8, 0xFu);
     { int r, c; for (r = 0; r < HUD_ROWS; r++) for (c = 0; c < HUD_COLS; c++) g_hud_shown[r][c] = ' '; }
     /* the mesh, the colour headers and the HUD's headers and UVs stay in polygon / texture RAM */
     for (i = 0; i < 8; i++) {
         u32 cb;
+        VB_STEP("prime ", i);
         m2_frame_begin();
         quad_upload();
         for (cb = 1; cb < CB_HUD; cb++) m2_obj_color_header(cb);
@@ -682,8 +786,11 @@ int main(void) {
     }
     tf = vb_tstart(0);
     for (;;) {
+        VB_STEP("nat ", t % VB_NNAT);
         bench_native((int)(t % VB_NNAT));
+        VB_STEP("ext ", g_vb_ext_cmd[t % VB_NEXT]);
         bench_ext((int)(t % VB_NEXT));
+        VB_STEP("scene ", t);
         m2_frame_begin();
         m2_obj_frame_setup();
         g_vb_nobj = 0; g_sub_ticks = 0;
@@ -694,14 +801,26 @@ int main(void) {
         cubes(t);
         ts = vb_tstop(2, ts);
         g_vb_scene_us = ts == VB_TSAT ? 999999u : ts / 25u;
+        VB_STEP("hud ", t);
         hud_draw();
         g_vb_objs = g_vb_nobj;
+        VB_STEP("commit ", t);
         m2_frame_commit();
         hud_text();
         hud_flush();
+        VB_STEP("vsync ", t);
         m2_vsync();
         { u32 e = vb_tstop(0, tf); tf = vb_tstart(0); if (e != VB_TSAT) g_vb_frame_us = e / 25u; }
         g_vb_frames = ++t;
+#ifdef M2_GSX
+        if (t == (u32)VB_NEXT + 1u) {
+#ifdef VB_TRACE
+            g_trace_on = 0;
+#endif
+            report();
+        }   /* every ext case has run once */
+        if (vb_exit_asked()) return 0;          /* PROG_EXIT: back to the manager */
+#endif
     }
     return 0;
 }
