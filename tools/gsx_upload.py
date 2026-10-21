@@ -69,14 +69,29 @@ async def run(gs, g, gsx, name, report_s):
     return None
 
 
+async def prog_exit_slow(gs, g, link, pace, tries=3):
+    """PROG_EXIT to a running app. The board keeps a received byte only until the next one
+    lands (no FIFO), and an app may read the link only once a frame, so the 4-byte frame goes
+    out a byte every 40 ms (longer than a frame). A reply OK means the app left."""
+    link.send_pace = max(pace, 0.040)
+    try:
+        for i in range(tries):
+            rep = await gs.prog_exit()
+            print(f"PROG_EXIT -> {rep}")
+            if rep and rep[0] == g.GS_OK:
+                return "done"
+            await asyncio.sleep(0.5)
+        return None
+    finally:
+        link.send_pace = pace
+
+
 async def main_serial(g, port, baud, pace, gsx, name, report_s, exit_only):
     link = g.SerialLink(port, baud, send_pace=pace)
     try:
         gs = g.GeoSerial(link)
         if exit_only:
-            rep = await gs.prog_exit()
-            print(f"PROG_EXIT -> {rep}")
-            return "done" if rep and rep[0] == g.GS_OK else None
+            return await prog_exit_slow(gs, g, link, pace)
         return await run(gs, g, gsx, name, report_s)
     finally:
         link.close()
