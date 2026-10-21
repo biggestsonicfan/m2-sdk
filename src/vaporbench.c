@@ -29,7 +29,7 @@
  * GSX (M2_GSX): the 2B build as a geoserial app, uploaded over RS-422 to m2-x11's kernel and
  * run from its manager instead of burned (tools/gsx_upload.py). The kernel booted the SHARCs
  * with STF's cpres1/cpres2 already, so the app doesn't upload them again (which also keeps it
- * under the kernel's 64 KB slot). It reads the link while it waits for vsync and returns to the
+ * under the kernel's 64 KB slot). It checks the link a few times a frame and returns to the
  * manager on PROG_EXIT; once the ext sweep has gone round, it sends its numbers back as text.
  */
 #define M2_NO_FASTMATH   /* keep m2_cop_* on the COP: the point is to time it */
@@ -743,14 +743,10 @@ static void vb_gsx_boot(void) {
     geometry_stuff();
 }
 
-/* On silicon a host byte waits in RXD1 only until the next one lands (the 315-5649 has no FIFO;
- * MAME queues them, so a poll once a frame passed there and lost PROG_EXIT on a real 2B). So the
- * frame reads the link the whole time it waits for vsync, about half of it. */
-static int g_vb_exit;
-static void vb_vsync(void) {
-    u32 start = frameVBL;
-    while (frameVBL == start)
-        if (!g_vb_exit && vb_gs_poll_exit()) g_vb_exit = 1;
+static int vb_exit_asked(void) {   /* up to 16 link bytes a frame: a whole frame at 3 ms/byte */
+    int k;
+    for (k = 0; k < 16; k++) if (vb_gs_poll_exit()) return 1;
+    return 0;
 }
 
 int app_entry(void) {
@@ -813,11 +809,7 @@ int main(void) {
         hud_text();
         hud_flush();
         VB_STEP("vsync ", t);
-#ifdef M2_GSX
-        vb_vsync();
-#else
         m2_vsync();
-#endif
         { u32 e = vb_tstop(0, tf); tf = vb_tstart(0); if (e != VB_TSAT) g_vb_frame_us = e / 25u; }
         g_vb_frames = ++t;
 #ifdef M2_GSX
@@ -827,7 +819,7 @@ int main(void) {
 #endif
             report();
         }   /* every ext case has run once */
-        if (g_vb_exit) return 0;                /* PROG_EXIT: back to the manager */
+        if (vb_exit_asked()) return 0;          /* PROG_EXIT: back to the manager */
 #endif
     }
     return 0;
