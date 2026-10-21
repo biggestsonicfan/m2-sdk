@@ -8,6 +8,11 @@ The commands the 2A/2C kernels run natively are left out: vaporbench times those
 arguments it checks. For each other command the first case stftest has is kept (its arguments
 and its result count), so every command gets arguments that ran on all three boards.
 
+0x83, 0x84, 0x85 and 0x87 take a ring slot (0-127), and cpres1 does not mask it: a random
+word sends their reads (0x87: writes) far outside the afterimage ring, which on a real 2B hung
+the SHARC at 0x83 (#1387). Those four come from stftest's afterimage sequence instead (from the
+0x81 that is followed by a 0x49), where every slot is one a game would send.
+
 stftest puts the buffer RAM words its cases read at words 0x3800 (0x67-0x69's matrices) and
 0x3900 (0x4a's osage records). vaporbench draws while it benchmarks, and with M2_COP_EXT on 2A/2C
 its display lists live in words 0x0000-0x3fff, so the words move to the end of the last list
@@ -20,6 +25,7 @@ NATIVE = {1, 2, 3, 5, 6, 7, 8, 9, 10, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x1a, 
           0x24, 0x25, 0x2b, 0x2c, 0x2d, 0x2f, 0x59, 0x5c, 0x5d, 0x5e, 0x78}
 OLD_MAT, OLD_OSAGE = 0x3800, 0x3900
 NEW_MAT, NEW_OSAGE = 0x3e00, 0x3f00
+RING = {0x83, 0x84, 0x85, 0x87}
 
 src = open(sys.argv[1]).read()
 def array(name):
@@ -34,13 +40,25 @@ while bufs[i + 1]:
     i += 2 + bufs[i + 1]
 assert NEW_MAT + len(blocks[0][1]) <= NEW_OSAGE and NEW_OSAGE + len(blocks[1][1]) <= 0x4000
 
+split, i = [], 0                       # (offset, command) of every case
+while i < len(cases):
+    n, na = cases[i:i + 2]
+    split.append((i, n))
+    i += 3 + na
+seq_at = next(at for (at, n), (_, m) in zip(split, split[1:]) if n == 0x81 and m == 0x49)
+
 seen, picked, i = set(), [], 0
 while i < len(cases):
     n, na, nr = cases[i:i + 3]
     a = cases[i + 3:i + 3 + na]
-    i += 3 + na
+    at, i = i, i + 3 + na
     if n in NATIVE or n in seen:
         continue
+    if n in RING and at < seq_at:      # keep the place, take the arguments from the sequence
+        at = next(o for o, m in split if m == n and o >= seq_at)
+        n, na, nr = cases[at:at + 3]
+        a = cases[at + 3:at + 3 + na]
+        assert na == 1 and a[0] < 0x80
     seen.add(n)
     a = list(a)
     if n in (0x67, 0x68, 0x69):

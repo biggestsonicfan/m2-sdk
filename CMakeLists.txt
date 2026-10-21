@@ -145,6 +145,7 @@ if(M2_GSX)
         COMMAND ${Python3_EXECUTABLE} "${X11B}/tools/gen_gs_api.py"
         DEPENDS "${M2_X11}/tools/gen_gs_api.py" "${M2_X11}/src/gs/gs_api.list"
         VERBATIM)
+    file(GLOB GSX_HEADERS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.h")   # the SDK and its tables
     add_custom_command(OUTPUT ${GSX}
         COMMAND ${CMAKE_C_COMPILER} ${APP_SDK_FLAGS} -c "${CMAKE_SOURCE_DIR}/src/${M2_GAME}.c" -o gsx_game.o
         COMMAND ${CMAKE_C_COMPILER} ${APP_X11_FLAGS} -c "${GSX_SYS}" -o gsx_sys.o
@@ -157,7 +158,7 @@ if(M2_GSX)
         COMMAND ${CMAKE_OBJCOPY} -O binary gsx_app.elf "${GSX}"
         COMMAND ${Python3_EXECUTABLE} "${M2_X11}/tools/gsx_stamp.py" "${GSX}" gsx_app.elf gsx_game.o
         COMMAND ${CMAKE_COMMAND} -E echo "BUILD OK (${M2_GAME}, geoserial app):  roms/${M2_GAME}.gsx"
-        DEPENDS src/${M2_GAME}.c ${GSX_SYS} ${X11B}/temp/gs_sdk.h ${X11B}/temp/gs_api_compat.c
+        DEPENDS src/${M2_GAME}.c ${GSX_HEADERS} ${GSX_SYS} ${X11B}/temp/gs_sdk.h ${X11B}/temp/gs_api_compat.c
                 "${M2_X11}/lib/app.ld" "${M2_X11}/src/app_hdr.c" "${M2_X11}/src/app_start.c"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         VERBATIM)
