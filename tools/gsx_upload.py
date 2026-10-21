@@ -39,6 +39,25 @@ async def read_report(gs, done, seconds):
     return text.decode("latin-1").replace("\r", "")
 
 
+async def listen(gs, seconds, tail=400):
+    """After the report: what the app goes on sending (a -DVB_TRACE build: one letter a step)
+    for `seconds`, or until nothing has come for 10 s (a hang); prints the last `tail` chars."""
+    text, t0, last = bytearray(), time.time(), time.time()
+    while time.time() - t0 < seconds:
+        await asyncio.sleep(0.2)
+        got = await gs.link.recv_available()
+        if got:
+            text += got
+            last = time.time()
+        elif time.time() - last > 10:
+            print(f"   nothing for 10 s after {last - t0:.0f} s: the app stopped there")
+            break
+    t = text.decode("latin-1").replace("\r", "")
+    print(f"   {len(text)} bytes in {time.time() - t0:.0f} s; the last ones:")
+    print("\n".join("   " + l for l in t[-tail:].splitlines()) or "   (none)")
+    return bool(text) and time.time() - last <= 10
+
+
 async def run(gs, g, gsx, name, report_s):
     if not await gs.ping():
         ok, attempts, heard, statuses = await gs.wait_ping(25)
@@ -86,18 +105,21 @@ async def prog_exit_slow(gs, g, link, pace, tries=3):
         link.send_pace = pace
 
 
-async def main_serial(g, port, baud, pace, gsx, name, report_s, exit_only):
+async def main_serial(g, port, baud, pace, gsx, name, report_s, exit_only, listen_s=0):
     link = g.SerialLink(port, baud, send_pace=pace)
     try:
         gs = g.GeoSerial(link)
         if exit_only:
             return await prog_exit_slow(gs, g, link, pace)
-        return await run(gs, g, gsx, name, report_s)
+        res = await run(gs, g, gsx, name, report_s)
+        if res and listen_s and not await listen(gs, listen_s):
+            res = None
+        return res
     finally:
         link.close()
 
 
-async def main_mame(g, gsx, name, rompath, report_s, snap_dir, linger):
+async def main_mame(g, gsx, name, rompath, report_s, snap_dir, linger, listen_s=0):
     """MAME: claude_mame's bridge drives the emulated 315-5649. MAME_EXE_NAME (an absolute
     path works) picks the build; rompath must put the geoserial kernel's EPROM pair (a
     folder named sfight) before the stock sfight, schamp and segabill zips."""
@@ -116,6 +138,8 @@ async def main_mame(g, gsx, name, rompath, report_s, snap_dir, linger):
         gs = g.GeoSerial(g.MameLink(b))
         await gs.drain_boot_log()
         res = await run(gs, g, gsx, name, report_s)
+        if res and listen_s and not await listen(gs, listen_s):
+            res = None
         await asyncio.sleep(linger)
         if snap_dir:
             await b.call("snapshot")
@@ -148,6 +172,8 @@ def main():
     ap.add_argument("--m2x11", default=os.path.join(ROOT, "..", "m2-x11"))
     ap.add_argument("--exit", action="store_true", help="PROG_EXIT: back to the manager")
     ap.add_argument("--wait", type=float, default=30, help="seconds to wait for the report")
+    ap.add_argument("--listen", type=float, default=0,
+                    help="seconds to go on reading after the report (a -DVB_TRACE build's step letters)")
     ap.add_argument("--mame", action="store_true", help="test on MAME instead of a board")
     ap.add_argument("--rompath", default="", help="MAME: rompath (kernel pair first)")
     ap.add_argument("--snap", default="", help="MAME: snapshots (running, back) here")
@@ -158,9 +184,9 @@ def main():
     name = a.name or os.path.splitext(os.path.basename(a.gsx))[0]
     g = load_geo_serial(a.m2x11)
     if a.mame:
-        res = asyncio.run(main_mame(g, a.gsx, name, a.rompath, a.wait, a.snap, a.linger))
+        res = asyncio.run(main_mame(g, a.gsx, name, a.rompath, a.wait, a.snap, a.linger, a.listen))
     else:
-        res = asyncio.run(main_serial(g, a.port, a.baud, a.pace, a.gsx, name, a.wait, a.exit))
+        res = asyncio.run(main_serial(g, a.port, a.baud, a.pace, a.gsx, name, a.wait, a.exit, a.listen))
     sys.exit(0 if res else 1)
 
 

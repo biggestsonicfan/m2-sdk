@@ -44,11 +44,23 @@ void vb_gs_puts(const char *s);
 #endif
 #if defined(M2_GSX) && defined(VB_TRACE)
 /* -DVB_TRACE: a breadcrumb over the link before each step of the start and of the first ext
- * sweep, so a board that hangs shows where (the last line that came through) */
-static u32 g_trace_on = 1;
+ * sweep, so a board that hangs shows where (the last line that came through). After the
+ * report it goes on as one letter a step (n e s h c t v p: native, ext, scene, hud, commit, text,
+ * vsync, poll), a line every 64 frames: tools/gsx_upload.py --listen shows the last ones.
+ * -DVB_TRACE_LINES=0 leaves out the lines (MAME's link drains a byte a call: they swamp it). */
+#ifndef VB_TRACE_LINES
+#define VB_TRACE_LINES 1
+#endif
+static u32 g_trace_on = VB_TRACE_LINES;
 static void vb_step(const char *s, u32 v) {
     char b[24], *p = b; int k;
     if (!g_trace_on) return;
+    if (g_trace_on == 2) {
+        *p++ = s[0];
+        if (s[0] == 'p' && (v & 63u) == 0u) { *p++ = '\r'; *p++ = '\n'; }
+        *p = 0; vb_gs_puts(b);
+        return;
+    }
     while (*s) *p++ = *s++;
     for (k = 28; k >= 0; k -= 4) *p++ = "0123456789abcdef"[v >> k & 15u];
     *p++ = '\r'; *p++ = '\n'; *p = 0;
@@ -806,6 +818,7 @@ int main(void) {
         g_vb_objs = g_vb_nobj;
         VB_STEP("commit ", t);
         m2_frame_commit();
+        VB_STEP("text ", t);
         hud_text();
         hud_flush();
         VB_STEP("vsync ", t);
@@ -818,7 +831,11 @@ int main(void) {
             g_trace_on = 0;
 #endif
             report();
+#ifdef VB_TRACE
+            g_trace_on = 2;
+#endif
         }   /* every ext case has run once */
+        VB_STEP("poll ", t);
         if (vb_exit_asked()) return 0;          /* PROG_EXIT: back to the manager */
 #endif
     }
