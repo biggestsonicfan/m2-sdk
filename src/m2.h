@@ -346,32 +346,45 @@ M2_API void m2_loadfont(void) {
             M2_CHARGFX[bank * 128 * 32 + i] = gFont[i];
 }
 
-/* Bring up the board: colour-translation table, video timing, layer enable,
- * geometrizer parked, font loaded, I/O + vblank enabled. After this the game
- * sets its palette / solid tiles and runs an m2_vsync loop. */
-M2_API void m2_init(void) {
+/* ---- the hybrid NINDY's hand-off ---------------------------------------------
+ * In the hybrid burn ROM (m2-nindy at 0x000000, the program at 0x40000) NINDY brings the
+ * tile display up for its terminal with m2_tiles_init, and sets nindy_booted just before
+ * it starts the program. The program's m2_init then skips that setup (it only clears
+ * NINDY's text off the FG layer) and clears the flag. It is at 0x59CFE0, the 32 bytes
+ * kx_init.s's RAM clear leaves alone (STF's boot scratch), so it survives the program's
+ * start_ip; two words, so that RAM garbage at power-up can't pass for it. */
+#define M2_NINDY_BOOTED_ADDR  0x0059CFE0u
+#define M2_NINDY_BOOTED_MAGIC 0x4E494E42u   /* 'NINB' */
+#define M2_NINDY_BOOTED ((volatile u32 *)M2_NINDY_BOOTED_ADDR)  /* {magic, ~magic} */
+
+M2_API void m2_set_nindy_booted(void) {
+    M2_NINDY_BOOTED[0] = M2_NINDY_BOOTED_MAGIC;
+    M2_NINDY_BOOTED[1] = ~M2_NINDY_BOOTED_MAGIC;
+}
+
+/* Is the flag set? Clears it, so it is seen once per hand-off. */
+M2_API int m2_take_nindy_booted(void) {
+    int set = M2_NINDY_BOOTED[0] == M2_NINDY_BOOTED_MAGIC
+           && M2_NINDY_BOOTED[1] == ~M2_NINDY_BOOTED_MAGIC;
+    M2_NINDY_BOOTED[0] = 0;
+    M2_NINDY_BOOTED[1] = 0;
+    return set;
+}
+
+/* The tile display and nothing else: colour-translation table (the tiles go through it
+ * too), backdrop, video timing, layers, font, empty tilemaps, window mask. No writes to
+ * the copros' side (geometrizer, 0x10000000, 0x12800000, 0x98000C) and no interrupts,
+ * so it is safe before the COP boot: the hybrid NINDY's terminal runs on it. */
+M2_API void m2_tiles_init(void) {
     int i;
 
-    frameVBL = 0;             /* fixed cell (not .bss) — powers up as garbage */
     m2__build_colorxlat();
-    m2__build_luma2();        /* STF start_again_ip: LUMA2 (0x12800000) ramp */
     m2_setpal(0, 0);          /* default backdrop = black (games may override) */
-
-    M2_RENDERMODE = M2_BOARD_RENDERMODE; /* STF start_again_ip: 0x4004; 2A: 4 (m2_board.h) */
     M2_HSYNC = (u16)-84;        /* 0xFFAC — matches STF start_again_ip */
     M2_VSYNC = (u16)-3;         /* 0xFFFD — STF's value (was -2/0xFFFE, one line off) */
-    M2_VIDEO_CTRL = 0;
     M2_L1_HPOS = 0; M2_L1_VPOS = 0;            /* FG layer A: on, no scroll  */
     M2_L2_HPOS = 0; M2_L2_VPOS = 0x8000;       /* BG layer B: off            */
     for (i = 0; i < 0x200; i++) { M2_HSCRTB_1[i] = 0; M2_HSCRTB_2[i] = 0; }
-
-    /* park the geometrizer on an END instruction (no stray 3D) */
-    M2_GEO_WADDR = 0x00000000;
-    M2_GEO_END   = 0x00010000;
-    M2_GEO_WADDR = 0x00010000;
-    M2_GEO_END   = 0x00000000;
-    M2_GEO_RADDR = 0x00900000;
-    M2_ZCLIP     = 0xff;
 
     m2_loadfont();   /* font into char RAM, one copy per palette bank */
 
@@ -389,6 +402,32 @@ M2_API void m2_init(void) {
      * bug. This is THE real fix (the tilemap clear above alone did NOT fix it). */
     { volatile u16 *w = (volatile u16 *)0x0100C000u; int k;
       for (k = 0; k < 0x1000; k++) w[k] = 0u; }
+}
+
+/* Bring up the board: colour-translation table, video timing, layer enable,
+ * geometrizer parked, font loaded, I/O + vblank enabled. After this the game
+ * sets its palette / solid tiles and runs an m2_vsync loop. Behind the hybrid NINDY
+ * (nindy_booted set) the tile setup is already done: only NINDY's text is cleared. */
+M2_API void m2_init(void) {
+    frameVBL = 0;             /* fixed cell (not .bss) — powers up as garbage */
+    if (m2_take_nindy_booted()) {
+        u16 sp = m2_tile(0, 0x20); int k;
+        for (k = 0; k < 0x2000; k++) M2_TILE_FG[k] = sp;
+    } else {
+        m2_tiles_init();
+    }
+    m2__build_luma2();        /* STF start_again_ip: LUMA2 (0x12800000) ramp */
+
+    M2_RENDERMODE = M2_BOARD_RENDERMODE; /* STF start_again_ip: 0x4004; 2A: 4 (m2_board.h) */
+    M2_VIDEO_CTRL = 0;
+
+    /* park the geometrizer on an END instruction (no stray 3D) */
+    M2_GEO_WADDR = 0x00000000;
+    M2_GEO_END   = 0x00010000;
+    M2_GEO_WADDR = 0x00010000;
+    M2_GEO_END   = 0x00000000;
+    M2_GEO_RADDR = 0x00900000;
+    M2_ZCLIP     = 0xff;
 
     /* Aux-serial bring-up (i8251 at 0x01C80000), faithful to STF start_again_ip.
      * Inert in MAME's default hookup but needed on real hardware. (An STF-derived
