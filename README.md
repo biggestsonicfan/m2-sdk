@@ -150,6 +150,7 @@ Header-only; include from exactly ONE `.c` (they define the boot stubs):
 | `m2_scroll.h` | Tile-layer CG/pattern loader + 2×3 message font + line-scroll wave. |
 | `m2_io.h` | The 315-5649 on-board I/O chip as one struct (`M2_IO`): input bank + player ports (raw `M2_IN0_*`/`M2_INP_*` masks + decoded `m2_player_t`/`m2_player`) and the RS-422 link registers. Pulled in by `m2.h`. |
 | `m2_rs422.h` | Silicon-validated RS-422 (315-5649) host serial transport (uses `M2_IO`). |
+| *(no header)* | The **comm board** (cabinet link over the fibre ring, shared RAM at `0x01A10000`): no SDK header yet. [`docs/comm-board.md`](docs/comm-board.md) has the registers, the order to use them in, and AM2's names; m2-megamix's `board/src/link.c` is a working two-cabinet link. |
 | `m2_math.h` | Math-coprocessor (COP/cpres1) layer: command FIFO, the `COP_*` opcodes, the scalar/vector/matrix helpers (`m2_cop_fadd`/`cop_sincos`/`m2_cop_atan2`/`m2_cop_wmatrix`/…) + explicit-FIFO op emitters, and the `m2_fastmath.h` override. Semantics verified vs the cpres1 disassembly; `m2_3d.h` builds on it. |
 | `m2_fastmath.h` | Native i960 scalar float (overrides the COP FIFO round-trips). |
 | `m2_board.h` | Which board (`M2_BOARD_2A`/`2B`/`2C`) and the addresses that differ. Included by `m2_constants.h`. |
